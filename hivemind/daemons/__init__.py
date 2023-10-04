@@ -73,6 +73,3 @@ def test() -> None:
     daemon.run(
         "Retrieve the contents of this paper and save it to a file: https://arxiv.org/abs/2308.08155"
     )
-
-
-test()
