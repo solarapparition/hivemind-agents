@@ -1,7 +1,7 @@
 """Toolkit for supporting Autogen package."""
 
-from typing import Any
-from autogen import config_list_from_json
+from typing import Any, Callable
+from autogen import config_list_from_json, ConversableAgent
 
 ConfigDict = dict[str, Any]
 
@@ -26,3 +26,16 @@ def is_termination_msg(message: dict[str, str]) -> bool:
     return bool(message.get("content")) and message.get(
         "content", ""
     ).rstrip().endswith("TERMINATE")
+
+
+def continue_agent_conversation(
+    user_proxy: ConversableAgent, assistant: ConversableAgent
+) -> Callable[[str], str]:
+    """Construct function to continue a conversation with an agent."""
+
+    def continue_conversation(message: str) -> str:
+        """Continue the conversation with an agent."""
+        user_proxy.initiate_chat(assistant, message=message, clear_history=False)
+        return user_proxy.last_message()["content"]
+
+    return continue_conversation

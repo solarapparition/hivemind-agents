@@ -2,8 +2,8 @@
 
 # Adapted from AI Jason's original code here: https://github.com/JayZeeDesign/microsoft-autogen-experiments/blob/main/content_agent.py
 
-from pathlib import Path
-from typing import Any
+from textwrap import dedent
+from typing import Any, Callable
 from dataclasses import dataclass
 import json
 
@@ -23,6 +23,7 @@ from hivemind.toolkit.autogen import (
     ConfigDict,
     DEFAULT_CONFIG_LIST as config_list,
     DEFAULT_LLM_CONFIG as llm_config,
+    continue_agent_conversation,
 )
 from hivemind.config import BROWSERLESS_API_KEY, SERPER_API_KEY, BASE_WORK_DIR
 
@@ -83,12 +84,16 @@ def summarize(content: str) -> str:
         separators=["\n\n", "\n"], chunk_size=10000, chunk_overlap=500
     )
     docs = text_splitter.create_documents([content])
-    map_prompt = """
-    Write a detailed summary of the following text for a research purpose:
-    '''
-    {text}
-    '''
-    SUMMARY:"""
+
+    map_prompt = dedent(
+        """
+        Write a detailed summary of the following text for collating into a research report:
+        '''
+        {text}
+        '''
+        SUMMARY:
+        """
+    ).strip()
     map_prompt_template = PromptTemplate(template=map_prompt, input_variables=["text"])
     summary_chain = load_summarize_chain(
         llm=llm,
@@ -156,7 +161,7 @@ def research(query: str) -> str:
         },
     )
     user_proxy.initiate_chat(researcher, message=query)
-    user_proxy.stop_reply_at_receive(researcher) # stops the autoreply
+    user_proxy.stop_reply_at_receive(researcher)  # stops the autoreply
     return user_proxy.last_message()["content"]
 
 
@@ -205,12 +210,12 @@ class ResearchDaemon:
     def run(
         self,
         message: str,
-    ) -> None:
+    ) -> tuple[str, Callable[[str], str]]:
         """Run the daemon."""
 
         user_proxy = UserProxyAgent(
             name=f"{self.name}_user_proxy",
-            human_input_mode="TERMINATE",
+            human_input_mode="NEVER",
             max_consecutive_auto_reply=10,
             is_termination_msg=is_termination_msg,
             code_execution_config={"work_dir": self.work_dir},
@@ -223,18 +228,26 @@ class ResearchDaemon:
         assistant = AssistantAgent(
             name=f"{self.name}_assistant",
             llm_config=self.llm_config,
-            system_message="Convert the user's request to a search engine query, and use that to create arguments for your search function.",
+            system_message="Fulfill the user's search request using your research function.",
         )
         user_proxy.initiate_chat(
             assistant,
             message=message,
+        )
+        user_proxy.stop_reply_at_receive(assistant)
+
+        return user_proxy.last_message()["content"], continue_agent_conversation(
+            user_proxy, assistant
         )
 
 
 def test() -> None:
     """Test the daemon."""
     daemon = ResearchDaemon()
-    daemon.run("Find information on the 'autogen' framework for llms.")
+    reply, continue_conversation = daemon.run(
+        "Find information on the 'autogen' framework for llms."
+    )
+    print(reply)
 
 
 if __name__ == "__main__":
