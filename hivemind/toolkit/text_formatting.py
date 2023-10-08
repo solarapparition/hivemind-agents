@@ -1,8 +1,10 @@
 """Text formatting utilities."""
 
+from pathlib import Path
 from os import getenv
 from textwrap import dedent
 
+from pypdf import PdfReader
 import requests
 from langchain.schema import HumanMessage, SystemMessage
 
@@ -173,7 +175,26 @@ def test_raw_text_to_markdown() -> None:
     print(raw_text_to_markdown(test_text))
 
 
+def pdf_to_text(location: Path) -> str:
+    """Convert a pdf to raw scraped text."""
+    reader = PdfReader(location)
+    page_texts = [page.extract_text() for page in reader.pages]
+    merged_text = "\n".join(page_texts)
+    return merged_text
+
+
+def pdf_to_markdown(location: Path) -> str:
+    """Convert a pdf to markdown."""
+    return raw_text_to_markdown(pdf_to_text(location))
+
+
+def test_pdf_to_markdown() -> None:
+    """Run test."""
+    print(pdf_to_markdown(Path("paper.pdf")))
+
+
 if __name__ == "__main__":
     pass
+    # test_pdf_to_markdown()
     # test_raw_text_to_markdown()
     # test_webpage_to_markdown()

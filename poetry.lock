@@ -1846,6 +1846,24 @@ spelling = ["pyenchant (>=3.2,<4.0)"]
 testutils = ["gitpython (>3)"]
 
 [[package]]
+name = "pypdf"
+version = "3.16.3"
+description = "A pure-python PDF library capable of splitting, merging, cropping, and transforming PDF files"
+optional = false
+python-versions = ">=3.6"
+files = [
+    {file = "pypdf-3.16.3-py3-none-any.whl", hash = "sha256:d4af8502b8b3cb8d338b60664d8813e562dde38a6e6175e021f60316bbf42cae"},
+    {file = "pypdf-3.16.3.tar.gz", hash = "sha256:31bc99bd871f0a132dd741e761f6328beee227fccd96ab039d5e419e70c98ce3"},
+]
+
+[package.extras]
+crypto = ["PyCryptodome", "cryptography"]
+dev = ["black", "flit", "pip-tools", "pre-commit (<2.18.0)", "pytest-cov", "pytest-socket", "pytest-timeout", "wheel"]
+docs = ["myst_parser", "sphinx", "sphinx_rtd_theme"]
+full = ["Pillow (>=8.0.0)", "PyCryptodome", "cryptography"]
+image = ["Pillow (>=8.0.0)"]
+
+[[package]]
 name = "pyperclip"
 version = "1.8.2"
 description = "A cross-platform clipboard module for Python. (Only handles plain text for now.)"
@@ -2792,4 +2810,4 @@ testing = ["big-O", "jaraco.functools", "jaraco.itertools", "more-itertools", "p
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.11,<3.12"
-content-hash = "9421021d6725af5d5daaf1bcae512f2fe1cb21549f5d65ceb43af219c6d6c333"
+content-hash = "ce3415e9a7b7449f82f3c2695e1de66592f8e6bb11250cce40f07be5c511db91"
