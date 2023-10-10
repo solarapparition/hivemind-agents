@@ -6,7 +6,6 @@ from textwrap import dedent
 from typing import Any
 import json
 
-from bs4 import BeautifulSoup
 import requests
 from autogen import (
     AssistantAgent,
@@ -17,8 +16,9 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chains.summarize import load_summarize_chain
 from langchain import PromptTemplate
 
-from hivemind.toolkit.autogen import DEFAULT_CONFIG_LIST as config_list,
-from hivemind.config import BROWSERLESS_API_KEY, SERPER_API_KEY
+from hivemind.toolkit.autogen import DEFAULT_CONFIG_LIST as config_list
+from hivemind.config import SERPER_API_KEY
+from hivemind.toolkit.resource_retrieval import scrape
 
 
 def search(query: str) -> dict[str, Any]:
@@ -33,41 +33,15 @@ def search(query: str) -> dict[str, Any]:
     return response.json()
 
 
-def scrape(url: str) -> str | None:
+def scrape_and_summarize(url: str, printout: bool = False) -> str | None:
     """Scrape website, and also will summarize the content based on objective if the content is too large, objective is the original objective & task that user give to the agent, url is the url of the website to be scraped"""
 
-    print("Scraping website...")
-    # Define the headers for the request
-    headers = {
-        "Cache-Control": "no-cache",
-        "Content-Type": "application/json",
-    }
-
-    # Define the data to be sent in the request
-    data = {"url": url}
-
-    # Convert Python object to JSON string
-    data_json = json.dumps(data)
-
-    # Send the POST request
-    response = requests.post(
-        f"https://chrome.browserless.io/content?token={BROWSERLESS_API_KEY}",
-        headers=headers,
-        data=data_json,
-        timeout=60,
-    )
-
-    # Check the response status code
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.content, "html.parser")
-        text = soup.get_text()
+    if printout:
+        print("Scraping website...")
+    text = scrape(url)
+    if printout:
         print("CONTENT:", text)
-        if len(text) > 8000:
-            output = summarize(text)
-            return output
-        return text
-    print(f"HTTP request failed with status code {response.status_code}")
-    return None
+    return summarize(text) if len(text) > 8000 else text
 
 
 def summarize(content: str) -> str:
@@ -150,7 +124,7 @@ def research(query: str) -> str:
         human_input_mode="NEVER",
         function_map={
             "search": search,
-            "scrape": scrape,
+            "scrape": scrape_and_summarize,
         },
     )
     user_proxy.initiate_chat(researcher, message=query)
