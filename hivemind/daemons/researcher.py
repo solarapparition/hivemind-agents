@@ -8,7 +8,7 @@ from autogen import (
     UserProxyAgent,
 )
 
-from hivemind.toolkit.autogen import (
+from hivemind.toolkit.autogen_support import (
     is_termination_msg,
     ConfigDict,
     DEFAULT_CONFIG_LIST as config_list,

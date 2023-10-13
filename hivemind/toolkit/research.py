@@ -16,7 +16,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chains.summarize import load_summarize_chain
 from langchain import PromptTemplate
 
-from hivemind.toolkit.autogen import DEFAULT_CONFIG_LIST as config_list
+from hivemind.toolkit.autogen_support import DEFAULT_CONFIG_LIST as config_list
 from hivemind.config import SERPER_API_KEY
 from hivemind.toolkit.resource_retrieval import scrape
 

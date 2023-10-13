@@ -1,6 +1,7 @@
-"""Agents for performing specific, simple tasks."""
+"""Agent for performing web tasks."""
 
 from dataclasses import dataclass
+from typing import Callable
 
 from autogen import (
     AssistantAgent,
@@ -8,13 +9,11 @@ from autogen import (
 )
 
 from hivemind.config import BASE_WORK_DIR
-from hivemind.toolkit.autogen import (
+from hivemind.toolkit.autogen_support import (
     is_termination_msg,
     DEFAULT_LLM_CONFIG as llm_config,
     continue_agent_conversation,
 )
-
-from typing import Callable
 
 
 @dataclass
