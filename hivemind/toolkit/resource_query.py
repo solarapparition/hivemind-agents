@@ -8,7 +8,7 @@ import langchain
 from langchain.schema import SystemMessage
 from langchain.cache import SQLiteCache
 from embedchain import App
-from embedchain.config import ChromaDbConfig
+from embedchain.config import ChromaDbConfig, LlmConfig
 
 from hivemind.config import EMBEDCHAIN_DATA_DIR, LANGCHAIN_CACHE_DIR
 from hivemind.toolkit.models import query_model, exact_model
@@ -30,7 +30,7 @@ def query_resource(resource_location: str, query: str, update: bool = False) -> 
     qna_bot = App(db_config=ChromaDbConfig(dir=str(resource_dir)))
     if new_resource or update:
         qna_bot.add(resource_location)
-    return qna_bot.query(query)
+    return qna_bot.query(query, config=LlmConfig(model="gpt-4"))
 
 
 def test_query_resource() -> None:
@@ -58,7 +58,7 @@ def test_query_resource() -> None:
     print(f"{response_3=}")
 
 
-def check_for_error(message: str) -> str:
+def check_for_error(message: str) -> str | None:
     """Check for missing components in messages that are meant for conversion to `query_resource` params. Error is meant to be sent back to a user (either human or agent)."""
     instructions = """
     You are a message validation bot. Your purpose is to check for specific components that must be present in a message, and to return an error message if they are missing.
@@ -87,9 +87,10 @@ def check_for_error(message: str) -> str:
     messages = [SystemMessage(content=instructions)]
     result = query_model(exact_model, messages, printout=False)
     error = extract_blocks(result, "text")
-    if not error or "N/A" not in error[-1] and "Error:" not in error[-1]:
-        raise ValueError(f"Unable to extract error validation result: `{error}`")
-    return error[-1].strip()
+    if not error or ("N/A" not in error[-1] and "Error:" not in error[-1]):
+        raise ValueError(f"Unable to extract error validation result:\n{error}")
+    error_text = error[-1].strip()
+    return error_text if "Error:" in error_text else None
 
 
 def test_check_for_error() -> None:

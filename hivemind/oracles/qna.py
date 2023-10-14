@@ -11,6 +11,7 @@ from autogen import (
     UserProxyAgent,
 )
 
+from hivemind.config import BASE_WORK_DIR
 from hivemind.toolkit.autogen_support import (
     is_termination_msg,
     ConfigDict,
@@ -18,27 +19,7 @@ from hivemind.toolkit.autogen_support import (
     DEFAULT_LLM_CONFIG as llm_config,
     continue_agent_conversation,
 )
-from hivemind.toolkit.research import research
-from hivemind.config import EMBEDCHAIN_DATA_DIR
-
-
-
-def query_resource(resource_location: str, query: str) -> str:
-    """Ask a question about a resource ."""
-    makedirs(EMBEDCHAIN_DATA_DIR, exist_ok=True)
-    qna_bot = App(
-        db_config=ChromaDbConfig(allow_reset=True, dir=str(EMBEDCHAIN_DATA_DIR))
-    )
-    qna_bot.add(
-        resource_location,
-    )
-    response = qna_bot.chat(
-        query,
-        config=LlmConfig(model="gpt-4"),
-        dry_run=True,
-    )
-    qna_bot.db.reset()
-    return response
+from hivemind.toolkit.resource_query import check_for_error, query_resource
 
 
 @dataclass
@@ -50,58 +31,48 @@ class QuestionAnswerOracle:
         """Name of the agent."""
         return "qna_oracle"
 
-    # @property
-    # def llm_config(self) -> ConfigDict:
-    #     """Return the config for the LLM."""
+    @property
+    def llm_config(self) -> ConfigDict:
+        """Return the config for the LLM."""
 
-    #     return {
-    #         "functions": [
-    #             {
-    #                 "name": "research",
-    #                 "description": "research about a given topic, returning the research material including reference links",
-    #                 "parameters": {
-    #                     "type": "object",
-    #                     "properties": {
-    #                         "query": {
-    #                             "type": "string",
-    #                             "description": "The topic to be researched about",
-    #                         }
-    #                     },
-    #                     "required": ["query"],
-    #                 },
-    #             },
-    #         ],
-    #         "raise_on_ratelimit_or_timeout": None,
-    #         "request_timeout": 600,
-    #         "seed": 42,
-    #         "config_list": config_list,
-    #         "temperature": 0,
-    #     }
+        return {
+            "functions": [
+                {
+                    "name": "query_resource",
+                    "description": "Get the answer to a simple natural language question from a resource.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "resource_location": {
+                                "type": "string",
+                                "description": "The location (URI) of the resource.",
+                            },
+                            "query": {
+                                "type": "string",
+                                "description": "The question to ask the resource.",
+                            },
+                        },
+                        "required": ["resource_location", "query"],
+                    },
+                },
+            ],
+            "raise_on_ratelimit_or_timeout": None,
+            "request_timeout": 600,
+            "seed": 42,
+            "config_list": config_list,
+            "temperature": 0,
+        }
 
-    # @property
-    # def work_dir(self) -> str:
-    #     """Return the working directory for the daemon."""
-    #     return str(BASE_WORK_DIR / "research_daemon")
+    @property
+    def work_dir(self) -> str:
+        """Return the working directory for the daemon."""
+        return str(BASE_WORK_DIR / "qna_oracle")
 
     def run(
         self,
         message: str,
     ) -> tuple[str, Callable[[str], str]]:
         """Run the daemon."""
-
-        from hivemind.toolkit.embedchain_support import query_resource, check_for_error
-
-
-
-
-            
-            
-        error = check_for_error(message)
-
-        
-
-        # ....
-        # TODO: create conversation interface for qna function
 
         user_proxy = UserProxyAgent(
             name=f"{self.name}_user_proxy",
@@ -110,32 +81,32 @@ class QuestionAnswerOracle:
             is_termination_msg=is_termination_msg,
             code_execution_config={"work_dir": self.work_dir},
             llm_config=llm_config,
-            system_message="Reply TERMINATE if the task has been solved at full satisfaction. Otherwise, reply CONTINUE, or the reason why the task is not solved yet.",
+            system_message="Reply TERMINATE after you receive an answer to the query.",
             function_map={
-                "research": research,
+                "query_resource": query_resource,
             },
         )
         assistant = AssistantAgent(
             name=f"{self.name}_assistant",
             llm_config=self.llm_config,
-            system_message="Fulfill the user's search request using your research function.",
+            system_message="Convert the user's request to a query and resource location and use the `query_resource` function to get the answer.",
         )
+        continue_conversation = continue_agent_conversation(user_proxy, assistant)
+        if error := check_for_error(message):
+            return error, continue_conversation
         user_proxy.initiate_chat(
             assistant,
             message=message,
         )
         user_proxy.stop_reply_at_receive(assistant)
-
-        return user_proxy.last_message()["content"], continue_agent_conversation(
-            user_proxy, assistant
-        )
+        return user_proxy.last_message()["content"], continue_conversation
 
 
 def test() -> None:
     """Test the daemon."""
     daemon = QuestionAnswerOracle()
     reply, continue_conversation = daemon.run(
-        "Find information on the 'autogen' framework for llms."
+        "Tell me about the recent history of OpenAI using the page at https://en.wikipedia.org/wiki/OpenAI",
     )
     print(reply)
 
