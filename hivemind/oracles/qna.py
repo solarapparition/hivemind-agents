@@ -104,8 +104,8 @@ class QuestionAnswerOracle:
 
 def test() -> None:
     """Test the daemon."""
-    daemon = QuestionAnswerOracle()
-    reply, continue_conversation = daemon.run(
+    agent = QuestionAnswerOracle()
+    reply, continue_conversation = agent.run(
         "Tell me about the recent history of OpenAI using the page at https://en.wikipedia.org/wiki/OpenAI",
     )
     print(reply)
