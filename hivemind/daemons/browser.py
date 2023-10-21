@@ -18,7 +18,7 @@ langchain.llm_cache = SQLiteCache(
 
 
 @dataclass
-class WebpageOracle:
+class WebpageInspectorOracle:
     """Agent to inspect the contents of a webpage with varying degrees of detail."""
 
     html: str
@@ -217,25 +217,25 @@ class WebpageOracle:
 
 
 def test_page_outline() -> None:
-    """Test webpage oracle ability to generate page outline."""
+    """Test webpage inspector ability to generate page outline."""
     page = Path(TEST_DIR / "cleaned_page.html").read_text(encoding="utf-8")
-    oracle = WebpageOracle(html=page, message_history=[])
+    oracle = WebpageInspectorOracle(html=page, message_history=[])
     print(oracle.extract_page_outline())  # expect hierarchical outline of page
 
 
 def test_section_outline() -> None:
-    """Test webpage oracle ability to generate section outline."""
+    """Test webpage inspector ability to generate section outline."""
     page = Path(TEST_DIR / "cleaned_page.html").read_text(encoding="utf-8")
-    oracle = WebpageOracle(html=page, message_history=[])
+    oracle = WebpageInspectorOracle(html=page, message_history=[])
     print(
         oracle.extract_section_outline("Readme")
     )  # expect hierarchical outline of Readme section
 
 
 def test_zoom() -> None:
-    """Test webpage oracle ability to zoom in on a section of the page."""
+    """Test webpage inspector ability to zoom in on a section of the page."""
     page = Path(TEST_DIR / "cleaned_page.html").read_text(encoding="utf-8")
-    oracle = WebpageOracle(html=page, message_history=[])
+    oracle = WebpageInspectorOracle(html=page, message_history=[])
     print(oracle.zoom("Readme"))
     breakpoint()
 
