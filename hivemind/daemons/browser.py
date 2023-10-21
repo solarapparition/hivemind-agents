@@ -183,7 +183,7 @@ class WebpageOracle:
         return self.section_context if self.breadcrumbs else self.full_page_context
 
     def extract_section_outline(self, section: str) -> str:
-        """Zoom in on a section of the page."""
+        """Extract the outline of a section of the page."""
         instructions = dedent_and_strip(
             """
             Please give me a high-level, hierarchical outline of the contents of the `{section}` SUBSECTION of the section you are viewing.
@@ -206,6 +206,14 @@ class WebpageOracle:
         if result := extract_blocks(result, block_type="markdown"):
             return result[0].strip()
         raise ValueError("Could not extract section outline.")
+
+    def zoom(self, section: str) -> None:
+        """Zoom in on a section of the page."""
+        self._breadcrumbs = [*self.breadcrumbs, section]
+        self._section_outlines = {
+            **self.section_outlines,
+            self.breadcrumbs: self.extract_section_outline(section),
+        }
 
 
 def test_page_outline() -> None:
