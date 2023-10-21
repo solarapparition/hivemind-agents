@@ -16,6 +16,8 @@ makedirs(LANGCHAIN_CACHE_DIR, exist_ok=True)
 TEST_DIR = DATA_DIR / "test"
 makedirs(TEST_DIR, exist_ok=True)
 BROWSERPILOT_DATA_DIR = DATA_DIR / "browserpilot"
+makedirs(BROWSERPILOT_DATA_DIR, exist_ok=True)
+
 secrets: dict[str, str] = yaml.load(SECRETS_LOCATION)
 BROWSERLESS_API_KEY = secrets["BROWSERLESS_API_KEY"]
 SERPER_API_KEY = secrets["SERPER_API_KEY"]
