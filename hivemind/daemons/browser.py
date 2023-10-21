@@ -182,7 +182,7 @@ class WebpageOracle:
         """Context for the current view of the page."""
         return self.section_context if self.breadcrumbs else self.full_page_context
 
-    def zoom(self, section: str) -> str:
+    def extract_section_outline(self, section: str) -> str:
         """Zoom in on a section of the page."""
         instructions = dedent_and_strip(
             """
@@ -202,7 +202,10 @@ class WebpageOracle:
             SystemMessage(content=self.base_instructions),
             HumanMessage(content=instructions.format(section=section)),
         ]
-        return query_model(self.model, messages, printout=False).strip()
+        result = query_model(self.model, messages, printout=False).strip()
+        if result := extract_blocks(result, block_type="markdown"):
+            return result[0].strip()
+        raise ValueError("Could not extract section outline.")
 
 
 def test_page_outline() -> None:
@@ -212,13 +215,27 @@ def test_page_outline() -> None:
     print(oracle.extract_page_outline())  # expect hierarchical outline of page
 
 
+def test_section_outline() -> None:
+    """Test webpage oracle ability to generate section outline."""
+    page = Path(TEST_DIR / "cleaned_page.html").read_text(encoding="utf-8")
+    oracle = WebpageOracle(html=page, message_history=[])
+    print(
+        oracle.extract_section_outline("Readme")
+    )  # expect hierarchical outline of Readme section
+
+
 def test_zoom() -> None:
     """Test webpage oracle ability to zoom in on a section of the page."""
     page = Path(TEST_DIR / "cleaned_page.html").read_text(encoding="utf-8")
     oracle = WebpageOracle(html=page, message_history=[])
     print(oracle.zoom("Readme"))
+    breakpoint()
 
 
+if __name__ == "__main__":
+    # test_page_outline()
+    test_section_outline()
+    # test_zoom()
 
 # TODO: zoom system
 # ....
@@ -229,9 +246,6 @@ def test_zoom() -> None:
 # TODO: send command to browserpilot
 # > TODO: convert image of page to element list
 # > idea for screenreader
-if __name__ == "__main__":
-    # test_page_outline()
-    test_zoom()
 
 breakpoint()  # print(*(message.content for message in messages), sep="\n\n")
 
