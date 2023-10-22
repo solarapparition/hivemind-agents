@@ -196,7 +196,7 @@ class WebpageInspectorOracle:
             """
             Please give me a high-level, hierarchical outline of the contents of the `{section}` SUBSECTION of the section you are viewing:
             - If there are subsections nested WITHIN the `{section}` subsection, include the next-level-down subsections.
-              - If there are no subsections nested within but there is text content, give a concise but thorough distillation of the textual content of the `{section}` subsection.
+              - If there are no subsections nested within but there is text content, give a concise outline (think "Mordin Solus" style) of the text content in the `{section}` subsection. Do not add information.
             - If there are important INTERACTIVE elements within the `{section}` subsection, include them, and their element type (e.g. <a>, <input>, <button>, etc.).
 
             Enclose the subsection outline in a markdown code block:
@@ -239,13 +239,6 @@ def test_zoom_out() -> None:
     breakpoint()
 
 
-if __name__ == "__main__":
-    # test_page_outline()
-    # test_section_outline()
-    # test_zoom_in()
-    test_zoom_out()
-
-
 def test_zoom_in() -> None:
     """Test webpage inspector ability to zoom in on a section of the page."""
     page = Path(TEST_DIR / "cleaned_page.html").read_text(encoding="utf-8")
@@ -254,6 +247,13 @@ def test_zoom_in() -> None:
     print(oracle.section_outline)  # expect hierarchical outline of Readme section
     oracle.zoom_in("Installation")
     print(oracle.section_outline)  # expect concise distillation of Installation section
+
+
+if __name__ == "__main__":
+    # test_page_outline()
+    # test_section_outline()
+    test_zoom_in()
+    # test_zoom_out()
 
 
 def test_section_outline() -> None:
@@ -272,11 +272,11 @@ def test_page_outline() -> None:
     print(oracle.extract_page_outline())  # expect hierarchical outline of page
 
 
+# TODO: zoom functionality
 # ....
-# > TODO: element search functionality
+# TODO: webpage inspector oracle
 # TODO: wrapper around browserpilot > navigator daemon
 # TODO: convert action to command > use instructions from browserpilot readme
-# TODO: give command to page
 # TODO: send command to browserpilot
 # > TODO: convert image of page to element list
 # > idea for screenreader
