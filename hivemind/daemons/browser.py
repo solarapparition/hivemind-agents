@@ -17,6 +17,12 @@ langchain.llm_cache = SQLiteCache(
 )
 
 
+class ZoomError(Exception):
+    """Error when zooming in or out of a page."""
+
+    pass
+
+
 @dataclass
 class WebpageInspectorOracle:
     """Agent to inspect the contents of a webpage with varying degrees of detail."""
@@ -29,6 +35,9 @@ class WebpageInspectorOracle:
 
     _breadcrumbs: list[str] | None = None
     """Breadcrumbs for where the agent is focused on the page."""
+
+    _section_outlines: dict[tuple[str, ...], str] | None = None
+    """All currently generated section outlines."""
 
     @property
     def role_instructions(self) -> str:
@@ -137,8 +146,6 @@ class WebpageInspectorOracle:
         Possibly not a unique identifier, so only use for display purposes."""
         return self.breadcrumbs[-1]
 
-    _section_outlines: dict[tuple[str, ...], str] | None = None
-
     @property
     def section_outlines(self) -> dict[tuple[str, ...], str]:
         """All currently generated section outlines."""
@@ -168,7 +175,8 @@ class WebpageInspectorOracle:
             ```
             {section_outline}
             ```
-            Here is the section breadcrumb trail:
+
+            Here is the section breadcrumb trail, from the root of the page to the current section:
             {breadcrumbs}
             """
         ).format(
@@ -186,9 +194,11 @@ class WebpageInspectorOracle:
         """Extract the outline of a section of the page."""
         instructions = dedent_and_strip(
             """
-            Please give me a high-level, hierarchical outline of the contents of the `{section}` SUBSECTION of the section you are viewing.
-            Include the next-level subsections nested WITHIN the {section} subsection.
-            Include the most important INTERACTIVE elements within the {section} subsection, and their element type (e.g. <a>, <input>, <button>, etc.). 
+            Please give me a high-level, hierarchical outline of the contents of the `{section}` SUBSECTION of the section you are viewing:
+            - If there are subsections nested WITHIN the `{section}` subsection, include the next-level-down subsections.
+              - If there are no subsections nested within but there is text content, give a concise but thorough distillation of the textual content of the `{section}` subsection.
+            - If there are important INTERACTIVE elements within the `{section}` subsection, include them, and their element type (e.g. <a>, <input>, <button>, etc.).
+
             Enclose the subsection outline in a markdown code block:
             ```markdown
             {{outline}}
@@ -207,20 +217,43 @@ class WebpageInspectorOracle:
             return result[0].strip()
         raise ValueError("Could not extract section outline.")
 
-    def zoom(self, section: str) -> None:
+    def zoom_in(self, section: str) -> None:
         """Zoom in on a section of the page."""
+        new_section_outline = self.extract_section_outline(section)
         self._breadcrumbs = [*self.breadcrumbs, section]
         self._section_outlines = {
             **self.section_outlines,
-            self.breadcrumbs: self.extract_section_outline(section),
+            self.breadcrumbs: new_section_outline,
         }
 
+    def zoom_out(self) -> None:
+        """Zoom out of the current section of the page."""
+        if not self._breadcrumbs:
+            raise ZoomError("Cannot zoom out of overall view of the page.")
+        self._breadcrumbs = self._breadcrumbs[:-1]
 
-def test_page_outline() -> None:
-    """Test webpage inspector ability to generate page outline."""
+
+def test_zoom_out() -> None:
+    """Test webpage inspector ability to zoom out of a section of the page."""
+
+    breakpoint()
+
+
+if __name__ == "__main__":
+    # test_page_outline()
+    # test_section_outline()
+    # test_zoom_in()
+    test_zoom_out()
+
+
+def test_zoom_in() -> None:
+    """Test webpage inspector ability to zoom in on a section of the page."""
     page = Path(TEST_DIR / "cleaned_page.html").read_text(encoding="utf-8")
     oracle = WebpageInspectorOracle(html=page, message_history=[])
-    print(oracle.extract_page_outline())  # expect hierarchical outline of page
+    oracle.zoom_in("Readme")
+    print(oracle.section_outline)  # expect hierarchical outline of Readme section
+    oracle.zoom_in("Installation")
+    print(oracle.section_outline)  # expect concise distillation of Installation section
 
 
 def test_section_outline() -> None:
@@ -232,20 +265,13 @@ def test_section_outline() -> None:
     )  # expect hierarchical outline of Readme section
 
 
-def test_zoom() -> None:
-    """Test webpage inspector ability to zoom in on a section of the page."""
+def test_page_outline() -> None:
+    """Test webpage inspector ability to generate page outline."""
     page = Path(TEST_DIR / "cleaned_page.html").read_text(encoding="utf-8")
     oracle = WebpageInspectorOracle(html=page, message_history=[])
-    print(oracle.zoom("Readme"))
-    breakpoint()
+    print(oracle.extract_page_outline())  # expect hierarchical outline of page
 
 
-if __name__ == "__main__":
-    # test_page_outline()
-    test_section_outline()
-    # test_zoom()
-
-# TODO: zoom system
 # ....
 # > TODO: element search functionality
 # TODO: wrapper around browserpilot > navigator daemon
