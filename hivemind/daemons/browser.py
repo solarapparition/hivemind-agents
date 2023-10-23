@@ -1,5 +1,6 @@
 """Agent that can browse a webpage and communicate its state."""
 
+from contextlib import suppress
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -235,8 +236,16 @@ class WebpageInspectorOracle:
 
 def test_zoom_out() -> None:
     """Test webpage inspector ability to zoom out of a section of the page."""
-
-    breakpoint()
+    page = Path(TEST_DIR / "cleaned_page.html").read_text(encoding="utf-8")
+    oracle = WebpageInspectorOracle(html=page, message_history=[])
+    oracle.zoom_in("Readme")
+    print(oracle.section_outline)  # expect hierarchical outline of Readme section
+    oracle.zoom_out()
+    print(oracle.section_outline)  # expect hierarchical outline of page
+    with suppress(ZoomError):
+        oracle.zoom_out()
+        print(oracle.section_outline)  # expect ZoomError
+        assert False, "Expected ZoomError"
 
 
 def test_zoom_in() -> None:
@@ -247,13 +256,6 @@ def test_zoom_in() -> None:
     print(oracle.section_outline)  # expect hierarchical outline of Readme section
     oracle.zoom_in("Installation")
     print(oracle.section_outline)  # expect concise distillation of Installation section
-
-
-if __name__ == "__main__":
-    # test_page_outline()
-    # test_section_outline()
-    test_zoom_in()
-    # test_zoom_out()
 
 
 def test_section_outline() -> None:
@@ -272,12 +274,19 @@ def test_page_outline() -> None:
     print(oracle.extract_page_outline())  # expect hierarchical outline of page
 
 
-# TODO: zoom functionality
+# if __name__ == "__main__":
+# test_page_outline()
+# test_section_outline()
+# test_zoom_in()
+# test_zoom_out()
+
+
 # ....
 # TODO: webpage inspector oracle
 # TODO: wrapper around browserpilot > navigator daemon
 # TODO: convert action to command > use instructions from browserpilot readme
 # TODO: send command to browserpilot
+# TODO: MVP: purely text-based browser
 # > TODO: convert image of page to element list
 # > idea for screenreader
 
