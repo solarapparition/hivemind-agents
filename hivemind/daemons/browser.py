@@ -230,7 +230,9 @@ class WebpageInspectorOracle:
     def zoom_out(self) -> None:
         """Zoom out of the current section of the page."""
         if not self._breadcrumbs:
-            raise ZoomError("Cannot zoom out of overall view of the page.")
+            raise ZoomError(
+                "Already at highest level of zoom (root) for the page. Cannot zoom out any further."
+            )
         self._breadcrumbs = self._breadcrumbs[:-1]
 
 
