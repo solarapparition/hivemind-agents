@@ -58,7 +58,7 @@ def test_query_resource() -> None:
     print(f"{response_3=}")
 
 
-def check_for_error(message: str) -> str | None:
+def validate(message: str) -> str | None:
     """Check for missing components in messages that are meant for conversion to `query_resource` params. Error is meant to be sent back to a user (either human or agent)."""
     instructions = """
     You are a message validation bot. Your purpose is to check for specific components that must be present in a message, and to return an error message if they are missing.
@@ -93,16 +93,16 @@ def check_for_error(message: str) -> str | None:
     return error_text if "Error:" in error_text else None
 
 
-def test_check_for_error() -> None:
+def test_validate() -> None:
     """Test check_for_error."""
     message = "Tell me about the philosophy of Python."
-    error = check_for_error(message)
+    error = validate(message)
     print(f"{error=}")  # expect error, since we're missing the resource location
     message = "https://en.wikipedia.org/wiki/Python_(programming_language)"
-    error = check_for_error(message)
+    error = validate(message)
     print(f"{error=}")  # expect error, since we're missing the query
     message = "Tell me about the philosophy of Python from the page at https://en.wikipedia.org/wiki/Python_(programming_language)"
-    error = check_for_error(message)
+    error = validate(message)
     print(
         f"{error=}"
     )  # expect no error, since we have both the resource location and the query

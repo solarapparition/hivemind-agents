@@ -1,7 +1,7 @@
 """Toolkit for supporting Autogen package."""
 
 from typing import Any, Callable
-from autogen import config_list_from_json, ConversableAgent
+from autogen import config_list_from_json, ConversableAgent, UserProxyAgent, AssistantAgent
 
 ConfigDict = dict[str, Any]
 
@@ -39,3 +39,7 @@ def continue_agent_conversation(
         return user_proxy.last_message()["content"]
 
     return continue_conversation
+
+def get_last_reply(user_proxy: UserProxyAgent, assistant: AssistantAgent) -> str:
+    """Get assistant's last reply in a message thread."""
+    return user_proxy.chat_messages[assistant][-2]["content"]

@@ -13,13 +13,14 @@ from autogen import (
 
 from hivemind.config import BASE_WORK_DIR
 from hivemind.toolkit.autogen_support import (
-    is_termination_msg,
     ConfigDict,
     DEFAULT_CONFIG_LIST as config_list,
     DEFAULT_LLM_CONFIG as llm_config,
+    is_termination_msg,
     continue_agent_conversation,
+    get_last_reply,
 )
-from hivemind.toolkit.resource_query import check_for_error, query_resource
+from hivemind.toolkit.resource_query import validate, query_resource
 
 
 @dataclass
@@ -92,20 +93,19 @@ class QuestionAnswerOracle:
             system_message="Convert the user's request to a query and resource location and use the `query_resource` function to get the answer.",
         )
         continue_conversation = continue_agent_conversation(user_proxy, assistant)
-        if error := check_for_error(message):
+        if error := validate(message):
             return error, continue_conversation
         user_proxy.initiate_chat(
             assistant,
             message=message,
         )
-        user_proxy.stop_reply_at_receive(assistant)
-        return user_proxy.last_message()["content"], continue_conversation
+        return get_last_reply(user_proxy, assistant), continue_conversation
 
 
 def test() -> None:
     """Test the daemon."""
-    agent = QuestionAnswerOracle()
-    reply, continue_conversation = agent.run(
+    daemon = QuestionAnswerOracle()
+    reply, continue_conversation = daemon.run(
         "Tell me about the recent history of OpenAI using the page at https://en.wikipedia.org/wiki/OpenAI",
     )
     print(reply)
