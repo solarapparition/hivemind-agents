@@ -17,6 +17,8 @@ TEST_DIR = DATA_DIR / "test"
 makedirs(TEST_DIR, exist_ok=True)
 BROWSERPILOT_DATA_DIR = DATA_DIR / "browserpilot"
 makedirs(BROWSERPILOT_DATA_DIR, exist_ok=True)
+CHROMEDRIVER_LOCATION = DATA_DIR / "drivers" / "chromedriver" / "chromedriver"
+makedirs(CHROMEDRIVER_LOCATION.parent, exist_ok=True)
 
 secrets: dict[str, str] = yaml.load(SECRETS_LOCATION)
 BROWSERLESS_API_KEY = secrets["BROWSERLESS_API_KEY"]
