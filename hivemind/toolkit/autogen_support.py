@@ -27,6 +27,9 @@ def is_termination_msg(message: dict[str, str]) -> bool:
         "content", ""
     ).rstrip().endswith("TERMINATE")
 
+def get_last_user_reply(user_proxy: ConversableAgent, assistant: ConversableAgent) -> str:
+    """Get assistant's last reply in a message thread. Assume that the last message is a "TERMINATE" message from the user to the assistant."""
+    return user_proxy.chat_messages[assistant][-3]["content"]
 
 def continue_agent_conversation(
     user_proxy: ConversableAgent, assistant: ConversableAgent
@@ -36,10 +39,7 @@ def continue_agent_conversation(
     def continue_conversation(message: str) -> str:
         """Continue the conversation with an agent."""
         user_proxy.initiate_chat(assistant, message=message, clear_history=False)
-        return user_proxy.last_message()["content"]
+        return get_last_user_reply(user_proxy, assistant)
+        # return user_proxy.last_message()["content"]
 
     return continue_conversation
-
-def get_last_user_reply(user_proxy: UserProxyAgent, assistant: AssistantAgent) -> str:
-    """Get assistant's last reply in a message thread. Assume that the last message is a "TERMINATE" message from the user to the assistant."""
-    return user_proxy.chat_messages[assistant][-3]["content"]

@@ -25,6 +25,7 @@ from hivemind.toolkit.text_formatting import dedent_and_strip, extract_blocks
 from hivemind.toolkit.autogen_support import get_last_user_reply
 from hivemind.toolkit.browserpilot_support import run_with_instructions
 from hivemind.toolkit.semantic_filtering import filter_semantic_html
+from hivemind.toolkit.webpage_inspector import WebpageInspector
 
 langchain.llm_cache = SQLiteCache(
     database_path=str(LANGCHAIN_CACHE_DIR / ".langchain.db")
@@ -198,6 +199,11 @@ class BrowserDaemon:
         """Return the page semantic source."""
         return filter_semantic_html(self.page_source).prettify()
 
+    @cached_property
+    def inspector(self) -> WebpageInspector:
+        """Return the webpage inspector."""
+        return WebpageInspector(self.page_semantic_source, [])
+
     @property
     def work_dir(self) -> Path:
         """Return the working directory for the daemon."""
@@ -222,6 +228,14 @@ class BrowserDaemon:
                         "required": ["url"],
                     },
                 },
+                {
+                    "name": "skim",
+                    "description": "Skim the contents of the currently zoomed in section.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                    },
+                },
                 # {
                 #     "name": "click_on_element",
                 #     "description": "Click on a particular page element.",
@@ -240,6 +254,7 @@ class BrowserDaemon:
                 # zoom_into_section
                 # zoom_out
                 # read_section_text
+                # ask a question <- should be another agent
             ],
             "raise_on_ratelimit_or_timeout": None,
             "request_timeout": 600,
@@ -311,9 +326,7 @@ class BrowserDaemon:
 
     def skim(self) -> str:
         """Skim the contents of the page."""
-        from hivemind.toolkit.webpage_inspector import WebpageInspector
-        inspector = WebpageInspector(self.page_semantic_source, [])
-        return inspector.section_outline
+        return self.inspector.section_outline
 
     def run(
         self,
@@ -325,13 +338,14 @@ class BrowserDaemon:
             agent=self,
             function_map={
                 "go_to_url": self.go_to_url,
+                "skim": self.skim,
             },
             llm_config=self.llm_config,
         )
         assistant = AssistantAgent(
             name=f"{self.name}_assistant",
             llm_config=self.llm_config,
-            system_message="Use one of your functions to fulfill the user's request.",
+            system_message="Use one of your functions to fulfill the user's request. Only report on whether you were successful or not. Do not summarize or repeat information that was output as a result of the function call. Do not offer to perform other tasks than what you've been asked.",
         )
         continue_conversation = continue_agent_conversation(user_proxy, assistant)
         validated, error = self.validate(message)
@@ -353,18 +367,14 @@ class BrowserDaemon:
 def test_skim_page() -> None:
     """Test skimming the contents of a page."""
     agent = BrowserDaemon()
-    agent.run("Go to https://github.com/microsoft/autogen")
-    print(agent.skim())
+    _, next_command = agent.run("Go to https://github.com/microsoft/autogen")
+    result = next_command("Skim the contents.")
+    validated, error = validate_text(
+        text=result,
+        requirements="The text must be a hierarchical outline.",
+    )
+    assert validated, error
 
-    # result = next_command("Skim the page.")
-    # print(result)
-    # validated, error = validate_text(
-    #     text=result,
-    #     requirements="The text must be a hierarchical outline.",
-    # )
-    # assert validated, error
-
-test_skim_page()
 
 def test_page_source() -> None:
     """Test prettifying the page source."""
@@ -428,6 +438,7 @@ def test() -> None:
     # test_validate()
     # test_go_to_url()
     # test_zoom_into_section()
+    # test_skim_page()
 
 
 if __name__ == "__main__":
