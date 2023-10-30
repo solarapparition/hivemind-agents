@@ -22,8 +22,9 @@ from hivemind.config import (
 )
 from hivemind.toolkit.models import query_model, exact_model
 from hivemind.toolkit.text_formatting import dedent_and_strip, extract_blocks
-from hivemind.toolkit.autogen_support import get_last_reply
+from hivemind.toolkit.autogen_support import get_last_user_reply
 from hivemind.toolkit.browserpilot_support import run_with_instructions
+from hivemind.toolkit.semantic_filtering import filter_semantic_html
 
 langchain.llm_cache = SQLiteCache(
     database_path=str(LANGCHAIN_CACHE_DIR / ".langchain.db")
@@ -89,23 +90,78 @@ def find_llm_validation_error(validation_messages: Sequence[BaseMessage]) -> str
     """
     result = query_model(exact_model, validation_messages, printout=False)
     error = extract_blocks(result, "text")
-    if not error or ("N/A" not in error[-1] and "Error:" not in error[-1]):
+    error_flag = "ERROR:"
+    if not error or ("N/A" not in error[-1] and error_flag not in error[-1]):
         raise ValueError(f"Unable to extract error validation result:\n{error}")
     error_text = error[-1].strip()
-    return error_text if "Error:" in error_text else None
+    return error_text if error_flag in error_text else None
 
-# def agent_go_to_url(browserpilot_agent: GPTSeleniumAgent, url: str) -> None:
-#     """Go to a URL."""
-#     instructions = dedent_and_strip(
-#         f"""
-#         Go to the URL `{url}`.
-#         """
-#     )
-#     run_with_instructions(browserpilot_agent, instructions)
 
-# def go_to_url(url: str) -> None:
-#     """Go to a URL."""
-#     print("BLAH")
+def validate_text(
+    text: str, requirements: str, context: str | None = None
+) -> tuple[bool, str]:
+    """Validate text output based on freeform requirements. Requirements should be relatively simple—something that a human who understands the context could check in a few seconds."""
+    instructions = """
+    # MISSION
+    You are a text validation bot. Your purpose is to validate that the text that you're given meets certain requirements.
+    
+    # VALIDATION CONTEXT
+    Here is some context in which the text is being evaluated to help with validation:
+    ```text
+    {context}
+    ```
+
+    # TEXT REQUIREMENTS
+    Here are the requirements to check for the text you're given:
+    ```text
+    {requirements}
+    ```
+
+    # INPUT
+    The text you're given is:
+    ```text
+    {text}
+    ```
+    
+    # OUTPUT
+    Check whether the text meets the requirements.
+
+    If the text meets the requirements, output the following (include the backtick delimiters):
+    ```text
+    N/A
+    ```
+
+    If the text does not meet the requirements, output the following (fill in the error message):
+    ```text
+    ERROR: {{error}}
+    ```
+    You may output other comments, but all other comments must be outside the ```text``` block.
+    """
+    instructions = dedent_and_strip(instructions).format(
+        text=text, requirements=requirements, context=context
+    )
+    error = find_llm_validation_error([SystemMessage(content=instructions)])
+    error_message = dedent_and_strip(
+        """
+        {error}
+        Original Text: "{text}"
+        """
+    ).format(error=error, text=text)
+    return error is None, "" if error is None else error_message
+
+
+def test_validate_text() -> None:
+    """Test validate_text."""
+    requirements = "Text must contain a number."
+    number_text = "What's 3 plus 2?"
+    validated, result = validate_text(number_text, requirements)
+    print(result)
+    assert validated
+    non_number_text = "What's the capital of France?"
+    validated, result = validate_text(non_number_text, requirements)
+    print(result)
+    assert not validated
+
 
 @dataclass
 class BrowserDaemon:
@@ -131,6 +187,16 @@ class BrowserDaemon:
             model_for_responses="gpt-3.5-turbo",
             user_data_dir=str(BROWSERPILOT_DATA_DIR),
         )
+
+    @property
+    def page_source(self) -> str:
+        """Return the page source."""
+        return self.browserpilot_agent.driver.page_source
+
+    @property
+    def page_semantic_source(self) -> str:
+        """Return the page semantic source."""
+        return filter_semantic_html(self.page_source).prettify()
 
     @property
     def work_dir(self) -> Path:
@@ -188,7 +254,8 @@ class BrowserDaemon:
         return dedent_and_strip(
             """
             - go to a particular URL
-            - zoom in to a subsection of the page
+            - skim the contents of the currently zoomed in section of the page
+            - zoom in to a subsection of the currently zoomed in section
             - zoom out on the page
             - read the text in a subsection of the page
             - scroll up or down
@@ -216,10 +283,9 @@ class BrowserDaemon:
         N/A
         ```
 
-        If the message has errors, output the following (fill in the error message):
+        If the message is invalid due not being one of these commands, output the following (fill in the error message):
         ```text
-        Error: Your message was invalid due to asking me to do something I cannot do.
-        Original Message: "{message}"
+        ERROR: Your message was invalid due to not being one of the allowed actions.
         ```
         """
         instructions = dedent_and_strip(instructions).format(
@@ -227,19 +293,27 @@ class BrowserDaemon:
         )
         messages = [SystemMessage(content=instructions)]
         error = find_llm_validation_error(messages)
-        if error:
-            error = f"{error}\nAllowed Actions: I am only able to do one and only one of the following actions:\n{self.allowed_actions}"
-        return error is None, "" if error is None else error
+        error_info = dedent_and_strip(
+            """
+            Error: Your message was invalid due to not being one of the allowed actions.
+            Original Message: "{message}"
+            Allowed Actions: I am only able to do one and only one of the following actions:
+            {allowed_actions}
+            """
+        ).format(message=message, allowed_actions=self.allowed_actions)
+        return error is None, "" if error is None else error_info
 
     def go_to_url(self, url: str) -> str:
         """Go to a URL."""
-        instructions = dedent_and_strip(
-            f"""
-            Go to the URL `{url}`.
-            """
-        )
+        instructions = f"Go to the URL `{url}`."
         run_with_instructions(self.browserpilot_agent, instructions)
-        return f"Successfully navigated to {url}."
+        return f"Successfully navigated to `{url}`.\n\nThe current URL is: `{self.browserpilot_agent.driver.current_url}`.\n\nThe current page title is: `{self.browserpilot_agent.driver.title}`.\n\nYou are currently zoomed in on the following section of the page: `root` (the whole page)."
+
+    def skim(self) -> str:
+        """Skim the contents of the page."""
+        from hivemind.toolkit.webpage_inspector import WebpageInspector
+        inspector = WebpageInspector(self.page_semantic_source, [])
+        return inspector.section_outline
 
     def run(
         self,
@@ -267,7 +341,57 @@ class BrowserDaemon:
             assistant,
             message=message,
         )
-        return get_last_reply(user_proxy, assistant), continue_conversation
+        return get_last_user_reply(user_proxy, assistant), continue_conversation
+
+
+# def test_zoom_into_section() -> None:
+#     """Test zooming into a particular part of a page."""
+#     agent = BrowserDaemon()
+#     _, next_command = agent.run("Go to https://github.com/microsoft/autogen")
+
+
+def test_skim_page() -> None:
+    """Test skimming the contents of a page."""
+    agent = BrowserDaemon()
+    agent.run("Go to https://github.com/microsoft/autogen")
+    print(agent.skim())
+
+    # result = next_command("Skim the page.")
+    # print(result)
+    # validated, error = validate_text(
+    #     text=result,
+    #     requirements="The text must be a hierarchical outline.",
+    # )
+    # assert validated, error
+
+test_skim_page()
+
+def test_page_source() -> None:
+    """Test prettifying the page source."""
+    agent = BrowserDaemon()
+    agent.run("Go to https://github.com/microsoft/autogen")
+    print(agent.page_semantic_source)
+    Path("page.html").write_text(agent.page_semantic_source, encoding="utf-8")
+
+
+def test_root_breadcrumbs() -> None:
+    """Test whether going to a URL comes back with the correct zoom breadcrumbs."""
+    agent = BrowserDaemon()
+    result, _ = agent.run("Go to https://github.com/microsoft/autogen")
+    validated, error = validate_text(
+        text=result,
+        requirements="The text must mention that user is on the root zoom level of the page.",
+    )
+    assert validated, error
+
+
+def test_sequential_actions() -> None:
+    """Test performing actions in sequence."""
+    agent = BrowserDaemon()
+    _, next_command = agent.run("Go to https://github.com/microsoft/autogen")
+    result = next_command("Go to https://google.com")
+    print(result)
+
 
 def test_browserpilot() -> None:
     """Test the browserpilot agent."""
@@ -298,6 +422,18 @@ def test_validate() -> None:
     assert validated
 
 
+def test() -> None:
+    """Test the agent."""
+    # test_root_breadcrumbs()
+    # test_validate()
+    # test_go_to_url()
+    # test_zoom_into_section()
+
+
+if __name__ == "__main__":
+    test()
+
+
 # TODO: zoom in to header
 # ....
 # TODO: workflow: "go to the autogen repository and figure out what i said about environments with decomposable tasks"
@@ -310,13 +446,6 @@ def test_validate() -> None:
 # > TODO: convert image of page to element list
 # > idea for screenreader
 
-
-def test() -> None:
-    """Test the agent."""
-    # test_validate()
-    test_go_to_url()
-
-test()
 
 # breakpoint()  # print(*(message.content for message in messages), sep="\n\n")
 

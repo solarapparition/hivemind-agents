@@ -1,5 +1,6 @@
 """Filter HTML to keep only key semantic elements."""
 
+from functools import lru_cache
 from pathlib import Path
 from bs4 import BeautifulSoup
 from bs4.element import Tag, PageElement
@@ -48,6 +49,7 @@ def traverse_filter(node: Tag) -> None:
         node.append(new_child)
 
 
+@lru_cache
 def filter_semantic_html(html_string: str) -> BeautifulSoup:
     """Filter HTML to keep only key semantic elements."""
     soup = BeautifulSoup(html_string, "html.parser")

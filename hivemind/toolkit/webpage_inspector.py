@@ -84,17 +84,31 @@ class WebpageInspector:
     def extract_page_outline(self) -> str:
         """Extract the outline of the page."""
         instructions = dedent_and_strip(
+            # "navigational structure" prompts claude to give a hierarchical outline of the page; "content outline" prompts it to focus on the textual contents
             """
-            Please give me a top-level, hierarchical outline of the contents on the page.
-            Include the TITLE of the page.
-            Include the TOP-LEVEL sections on the page.
-            Include also the MOST IMPORTANT interactive elements on the page, and their element type (e.g. <a>, <input>, <button>, etc.). 
-            Include also the MOST IMPORTANT text elements on the page.
-            Enclose the outline in a markdown code block:
+            Please give me a summary outline of the navigational structure of the page. Include any navigation, main, footer, and any other sections that are relevant for skimming the overall page contents.
+            Enclose the outline in a markdown block:
             ```markdown
-            {outline}
+            {{outline}}
             ```
             """
+            # """
+            # Please give me a high-level, hierarchical outline of the high-level sections of the page. Include any navigation, main, footer, and any other sections that are relevant for skimming the overall page contents.
+            # Enclose the outline in a markdown code block:
+            # ```markdown
+            # {{outline}}
+            # """
+            # """
+            # Please give me a top-level, hierarchical outline of the contents on the page; the outline should be a tree structure that includes:
+            # - the TITLE of the page.
+            # - all TOP-LEVEL sections on the page—e.g. navigation, main, footer, etc.
+            # - selected KEY interactive elements on the page, and their element type (e.g. <a>, <input>, <button>, etc.).
+            # - selected KEY text elements on the page.
+            # Enclose the outline in a markdown code block:
+            # ```text
+            # {{outline}}
+            # ```
+            # """
         )
         messages = [
             SystemMessage(content=self.role_instructions),

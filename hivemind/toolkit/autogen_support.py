@@ -40,6 +40,6 @@ def continue_agent_conversation(
 
     return continue_conversation
 
-def get_last_reply(user_proxy: UserProxyAgent, assistant: AssistantAgent) -> str:
-    """Get assistant's last reply in a message thread."""
-    return user_proxy.chat_messages[assistant][-2]["content"]
+def get_last_user_reply(user_proxy: UserProxyAgent, assistant: AssistantAgent) -> str:
+    """Get assistant's last reply in a message thread. Assume that the last message is a "TERMINATE" message from the user to the assistant."""
+    return user_proxy.chat_messages[assistant][-3]["content"]

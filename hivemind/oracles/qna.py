@@ -18,7 +18,7 @@ from hivemind.toolkit.autogen_support import (
     DEFAULT_LLM_CONFIG as llm_config,
     is_termination_msg,
     continue_agent_conversation,
-    get_last_reply,
+    get_last_user_reply,
 )
 from hivemind.toolkit.resource_query import validate, query_resource
 
@@ -99,7 +99,7 @@ class QuestionAnswerOracle:
             assistant,
             message=message,
         )
-        return get_last_reply(user_proxy, assistant), continue_conversation
+        return get_last_user_reply(user_proxy, assistant), continue_conversation
 
 
 def test() -> None:
