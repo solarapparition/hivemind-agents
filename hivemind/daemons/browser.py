@@ -190,6 +190,15 @@ class BrowserDaemon:
         }
 
     @property
+    def function_map(self) -> dict[str, Callable[[Any], Any]]:
+        """Map names defined in the LLM config to the actual functions."""
+        return {
+            "go_to_url": self.go_to_url,
+            "skim": self.skim,
+            "zoom_into_subsection": self.zoom_in,
+        }
+
+    @property
     def allowed_actions(self) -> str:
         """Return a list of allowed actions."""
         return dedent_and_strip(
@@ -262,10 +271,7 @@ class BrowserDaemon:
 
         user_proxy = make_hivemind_user_proxy(
             agent=self,
-            function_map={
-                "go_to_url": self.go_to_url,
-                "skim": self.skim,
-            },
+            function_map=self.function_map,
             llm_config=self.llm_config,
         )
         assistant = AssistantAgent(
@@ -284,30 +290,28 @@ class BrowserDaemon:
         return get_last_user_reply(user_proxy, assistant), continue_conversation
 
 
-# def test_zoom_into_section() -> None:
-#     """Test zooming into a particular part of a page."""
-#     agent = BrowserDaemon()
-#     _, next_command = agent.run("Go to https://github.com/microsoft/autogen")
+def test_validate() -> None:
+    """Test validation."""
+    validated, _ = BrowserDaemon().validate("Make a sandwich.")
+    assert not validated
+    validated, _ = BrowserDaemon().validate("Go to https://google.com")
+    assert validated
 
 
-def test_skim_page() -> None:
-    """Test skimming the contents of a page."""
+def test_go_to_url() -> None:
+    """Test go_to_url."""
+    agent = BrowserDaemon()
+    result, _ = agent.run("Go to https://google.com")
+    agent.browserpilot_agent.driver.quit()
+    assert "google" in result
+
+
+def test_sequential_actions() -> None:
+    """Test performing actions in sequence."""
     agent = BrowserDaemon()
     _, next_command = agent.run("Go to https://github.com/microsoft/autogen")
-    result = next_command("Skim the contents.")
-    validated, error = validate_text(
-        text=result,
-        requirements="The text must be a hierarchical outline.",
-    )
-    assert validated, error
-
-
-def test_page_source() -> None:
-    """Test prettifying the page source."""
-    agent = BrowserDaemon()
-    agent.run("Go to https://github.com/microsoft/autogen")
-    print(agent.page_semantic_source)
-    Path("page.html").write_text(agent.page_semantic_source, encoding="utf-8")
+    result = next_command("Go to https://google.com")
+    assert "google" in result
 
 
 def test_root_breadcrumbs() -> None:
@@ -319,14 +323,6 @@ def test_root_breadcrumbs() -> None:
         requirements="The text must mention that user is on the root zoom level of the page.",
     )
     assert validated, error
-
-
-def test_sequential_actions() -> None:
-    """Test performing actions in sequence."""
-    agent = BrowserDaemon()
-    _, next_command = agent.run("Go to https://github.com/microsoft/autogen")
-    result = next_command("Go to https://google.com")
-    print(result)
 
 
 def test_browserpilot() -> None:
@@ -342,20 +338,32 @@ def test_browserpilot() -> None:
     agent.driver.quit()
 
 
-def test_go_to_url() -> None:
-    """Test go_to_url."""
+def test_page_source() -> None:
+    """Test prettifying the page source."""
     agent = BrowserDaemon()
-    result, _ = agent.run("Go to https://google.com")
-    agent.browserpilot_agent.driver.quit()
-    print(result)
+    agent.run("Go to https://github.com/microsoft/autogen")
+    print(agent.page_semantic_source)
+    Path("page.html").write_text(agent.page_semantic_source, encoding="utf-8")
 
 
-def test_validate() -> None:
-    """Test validation."""
-    validated, _ = BrowserDaemon().validate("Make a sandwich.")
-    assert not validated
-    validated, _ = BrowserDaemon().validate("Go to https://google.com")
-    assert validated
+def test_skim_page() -> None:
+    """Test skimming the contents of a page."""
+    agent = BrowserDaemon()
+    _, next_command = agent.run("Go to https://github.com/microsoft/autogen")
+    result = next_command("Skim the contents.")
+    validated, error = validate_text(
+        text=result,
+        requirements="The text must be a hierarchical outline.",
+    )
+    assert validated, error
+
+
+def test_zoom_into_section() -> None:
+    """Test zooming into a particular part of a page."""
+    agent = BrowserDaemon()
+    _, next_command = agent.run("Go to https://github.com/microsoft/autogen")
+    result = next_command("Zoom into the 'Navigation' section.")
+    assert "Navigation" in result
 
 
 def test() -> None:
@@ -365,12 +373,15 @@ def test() -> None:
     # test_go_to_url()
     # test_zoom_into_section()
     # test_skim_page()
+    # test_zoom_into_section()
 
 
 if __name__ == "__main__":
     test()
 
 
+# TODO: need validation that subsection actually exists when zooming in in extract_section_outline
+# ....
 # TODO: zoom in to header
 # ....
 # TODO: workflow: "go to the autogen repository and figure out what i said about environments with decomposable tasks"

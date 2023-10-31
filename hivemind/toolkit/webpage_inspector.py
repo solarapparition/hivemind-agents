@@ -180,7 +180,7 @@ class WebpageInspector:
     @property
     def breadcrumb_display(self) -> str:
         """Display of the breadcrumb trail to the current section."""
-        return " > ".join(("Root page", *self.breadcrumbs))
+        return " -> ".join(("Root page", *self.breadcrumbs))
 
     @property
     def section_context(self) -> str:
@@ -207,16 +207,6 @@ class WebpageInspector:
         """Context for the current view of the page."""
         return self.section_context if self.breadcrumbs else self.full_page_context
 
-    # def validate_section_exists(self, subsection: str) -> tuple[bool, str]:
-    #     """Validate that a section exists in the current zoom view."""
-    #     from hivemind.toolkit.text_validation import validate_text
-    #     requirements = f"The outline in the text must contain a subsection called '{subsection}'."
-
-    #     return validate_text(
-    #         text=subsection,
-    #         requirements=requirements,
-    #         context=context,
-    #     )
     def subsection_exists(self, subsection: str) -> bool:
         """Validate that a section exists in the current section outline."""
         return subsection in self.section_outline
