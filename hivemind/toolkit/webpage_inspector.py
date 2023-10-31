@@ -22,6 +22,10 @@ class ZoomError(Exception):
     """Error when zooming in or out of a page."""
 
 
+class MissingSectionError(Exception):
+    """Error when a section is missing from the current zoom view."""
+
+
 @dataclass
 class WebpageInspector:
     """Agent to inspect the contents of a webpage with varying degrees of detail."""
@@ -203,14 +207,32 @@ class WebpageInspector:
         """Context for the current view of the page."""
         return self.section_context if self.breadcrumbs else self.full_page_context
 
-    def extract_section_outline(self, section: str) -> str:
+    # def validate_section_exists(self, subsection: str) -> tuple[bool, str]:
+    #     """Validate that a section exists in the current zoom view."""
+    #     from hivemind.toolkit.text_validation import validate_text
+    #     requirements = f"The outline in the text must contain a subsection called '{subsection}'."
+
+    #     return validate_text(
+    #         text=subsection,
+    #         requirements=requirements,
+    #         context=context,
+    #     )
+    def subsection_exists(self, subsection: str) -> bool:
+        """Validate that a section exists in the current section outline."""
+        return subsection in self.section_outline
+
+    def extract_section_outline(self, subsection: str) -> str:
         """Extract the outline of a section of the page."""
+        if not self.subsection_exists(subsection):
+            raise MissingSectionError(
+                f"Section {subsection} does not exist on the current zoom view: {self.breadcrumb_display}"
+            )
         instructions = dedent_and_strip(
             """
-            Please give me a high-level, hierarchical outline of the contents of the `{section}` SUBSECTION of the section you are viewing:
-            - If there are subsections nested WITHIN the `{section}` subsection, include the next-level-down subsections.
+            Please give me a high-level, hierarchical outline of the contents of the `{subsection}` SUBSECTION of the section you are viewing:
+            - If there are subsections nested WITHIN the `{subsection}` subsection, include the next-level-down subsections.
               - If there are no subsections nested within but there is text content, give a concise outline (think "Mordin Solus" style) of the text content in the `{section}` subsection. Do not add information.
-            - If there are important INTERACTIVE elements within the `{section}` subsection, include them, and their element type (e.g. <a>, <input>, <button>, etc.).
+            - If there are important INTERACTIVE elements within the `{subsection}` subsection, include them, and their element type (e.g. <a>, <input>, <button>, etc.).
 
             Enclose the subsection outline in a markdown code block:
             ```markdown
@@ -223,7 +245,7 @@ class WebpageInspector:
             SystemMessage(content=self.html_context),
             SystemMessage(content=self.current_view_context),
             SystemMessage(content=self.base_instructions),
-            HumanMessage(content=instructions.format(section=section)),
+            HumanMessage(content=instructions.format(subsection=subsection)),
         ]
         result = query_model(self.model, messages, printout=False).strip()
         if result := extract_blocks(result, block_type="markdown"):
@@ -232,7 +254,12 @@ class WebpageInspector:
 
     def zoom_in(self, section: str) -> None:
         """Zoom in on a section of the page."""
-        new_section_outline = self.extract_section_outline(section)
+        try:
+            new_section_outline = self.extract_section_outline(section)
+        except MissingSectionError as error:
+            raise ZoomError(
+                f"Section {section} does not exist on the current zoom view: `{self.breadcrumb_display}`"
+            ) from error
         self._breadcrumbs = [*self.breadcrumbs, section]
         self._section_outlines = {
             **self.section_outlines,
