@@ -221,7 +221,7 @@ class WebpageInspector:
             """
             Please give me a high-level, hierarchical outline of the contents of the `{subsection}` SUBSECTION of the section you are viewing:
             - If there are subsections nested WITHIN the `{subsection}` subsection, include the next-level-down subsections.
-              - If there are no subsections nested within but there is text content, give a concise outline (think "Mordin Solus" style) of the text content in the `{section}` subsection. Do not add information.
+              - If there are no subsections nested within but there is text content, give a concise outline (think "Mordin Solus" style) of the text content in the `{subsection}` subsection. Do not add information.
             - If there are important INTERACTIVE elements within the `{subsection}` subsection, include them, and their element type (e.g. <a>, <input>, <button>, etc.).
 
             Enclose the subsection outline in a markdown code block:

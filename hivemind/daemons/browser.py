@@ -162,9 +162,24 @@ class BrowserDaemon:
                         "properties": {},
                     },
                 },
+                {
+                    "name": "zoom_into_subsection",
+                    "description": "Zoom into a subsection of the currently zoomed in section.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "subsection": {
+                                "type": "string",
+                                "description": "The subsection to zoom into. Must be part of the currently zoomed in section.",
+                            },
+                        },
+                        "required": ["subsection"],
+                    },
+                },
+                # zoom_out
                 # {
-                #     "name": "click_on_element",
-                #     "description": "Click on a particular page element.",
+                #     "name": "click_element",
+                #     "description": "Click on a specific element on the page",
                 #     "parameters": {
                 #         "type": "object",
                 #         "properties": {
@@ -177,8 +192,6 @@ class BrowserDaemon:
                 #     },
                 # },
                 # type_text
-                # zoom_into_section
-                # zoom_out
                 # read_section_text
                 # ask a question <- should be another agent
             ],
@@ -262,6 +275,38 @@ class BrowserDaemon:
     def skim(self) -> str:
         """Skim the contents of the page."""
         return self.inspector.section_outline
+
+    @property
+    def page_title(self) -> str:
+        """Return the page title."""
+        return self.browserpilot_agent.driver.title
+
+    @property
+    def current_url(self) -> str:
+        """Return the current URL."""
+        return self.browserpilot_agent.driver.current_url
+
+    @property
+    def zoom_path(self) -> str:
+        """Return the current zoom path."""
+        return self.inspector.breadcrumb_display
+
+    def zoom_in(self, subsection: str) -> str:
+        """Zoom in to a particular section of the page."""
+        self.inspector.zoom_in(subsection)
+        feedback = """
+        Successfully zoomed in.
+        Current page title: `{title}`.
+        Current URL: `{url}`.
+        You are zoomed in on the following section of the page: `{subsection}`.
+        Full zoom path to this section: `{zoom_path}`.
+        """
+        return dedent_and_strip(feedback).format(
+            title=self.page_title,
+            url=self.current_url,
+            subsection=subsection,
+            zoom_path=self.zoom_path,
+        )
 
     def run(
         self,
@@ -358,11 +403,12 @@ def test_skim_page() -> None:
     assert validated, error
 
 
-def test_zoom_into_section() -> None:
+def test_zoom_into_subsection() -> None:
     """Test zooming into a particular part of a page."""
     agent = BrowserDaemon()
     _, next_command = agent.run("Go to https://github.com/microsoft/autogen")
     result = next_command("Zoom into the 'Navigation' section.")
+    # result should include navigation due to returning zoom breadcrumbs
     assert "Navigation" in result
 
 
@@ -371,17 +417,14 @@ def test() -> None:
     # test_root_breadcrumbs()
     # test_validate()
     # test_go_to_url()
-    # test_zoom_into_section()
     # test_skim_page()
-    # test_zoom_into_section()
+    # test_zoom_into_subsection()
 
 
 if __name__ == "__main__":
     test()
 
 
-# TODO: need validation that subsection actually exists when zooming in in extract_section_outline
-# ....
 # TODO: zoom in to header
 # ....
 # TODO: workflow: "go to the autogen repository and figure out what i said about environments with decomposable tasks"
