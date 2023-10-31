@@ -16,7 +16,7 @@ from hivemind.toolkit.text_formatting import dedent_and_strip
 from hivemind.toolkit.yaml_tools import yaml, dump_yaml_str
 from hivemind.toolkit.models import (
     query_model,
-    exact_model,
+    precise_model,
 )
 
 langchain.llm_cache = SQLiteCache(database_path=".data/.langchain.db")
@@ -339,7 +339,7 @@ class FunctionAgent(AICodingAgent):
         """Generate code for the function."""
         messages = self.code_generation_messaging()
         # breakpoint()  # print(*(message.content for message in messages), sep="\n\n---message---\n\n")
-        result = query_model(exact_model, messages, color=31)
+        result = query_model(precise_model, messages, color=31)
         code = extract_block(result, self.language)
         if not code:
             raise ValueError(
@@ -479,7 +479,7 @@ class FunctionAgent(AICodingAgent):
         """Update the function based on feedback."""
         messages = self.code_update_messaging(feedback)
         # breakpoint()  # print(*(message.content for message in messages), sep="\n\n---message---\n\n")
-        result = query_model(exact_model, messages, color=31)
+        result = query_model(precise_model, messages, color=31)
         updated_code_blocks = extract_blocks(result, self.language)
         if not updated_code_blocks:
             raise ValueError(

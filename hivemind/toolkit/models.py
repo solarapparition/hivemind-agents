@@ -5,7 +5,7 @@ from langchain.schema import BaseMessage
 from langchain.chat_models.base import BaseChatModel
 from langchain.chat_models import ChatOpenAI, ChatAnthropic
 
-exact_model = ChatOpenAI(temperature=0, model_name="gpt-4", verbose=False)  # type: ignore
+precise_model = ChatOpenAI(temperature=0, model_name="gpt-4", verbose=False)  # type: ignore
 creative_model = ChatOpenAI(temperature=0.7, model_name="gpt-4", verbose=False)  # type: ignore
 super_creative_model = ChatOpenAI(temperature=1.0, model_name="gpt-4", verbose=False)  # type: ignore
 fast_model = ChatOpenAI(temperature=0, model_name="gpt-3.5-turbo", verbose=False)  # type: ignore

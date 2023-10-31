@@ -11,7 +11,7 @@ from embedchain import App
 from embedchain.config import ChromaDbConfig, LlmConfig
 
 from hivemind.config import EMBEDCHAIN_DATA_DIR, LANGCHAIN_CACHE_DIR
-from hivemind.toolkit.models import query_model, exact_model
+from hivemind.toolkit.models import query_model, precise_model
 from hivemind.toolkit.text_extraction import extract_blocks
 
 yaml = YAML()
@@ -85,7 +85,7 @@ def validate(message: str) -> str | None:
     """
     instructions = instructions.format(message=message)
     messages = [SystemMessage(content=instructions)]
-    result = query_model(exact_model, messages, printout=False)
+    result = query_model(precise_model, messages, printout=False)
     error = extract_blocks(result, "text")
     if not error or ("N/A" not in error[-1] and "Error:" not in error[-1]):
         raise ValueError(f"Unable to extract error validation result:\n{error}")
