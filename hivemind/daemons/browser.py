@@ -5,13 +5,17 @@ from functools import cached_property
 from contextlib import suppress
 from pathlib import Path
 from dataclasses import dataclass
+import logging
 
 import langchain
 from autogen import UserProxyAgent, AssistantAgent
 from langchain.schema import SystemMessage, HumanMessage, BaseMessage, AIMessage
 from langchain.chat_models import ChatAnthropic
 from langchain.cache import SQLiteCache
-from browserpilot.agents.gpt_selenium_agent import GPTSeleniumAgent
+from browserpilot.agents.gpt_selenium_agent import (
+    GPTSeleniumAgent,
+    logger as browserpilot_logger,
+)
 
 from hivemind.config import (
     BASE_WORK_DIR,
@@ -176,7 +180,14 @@ class BrowserDaemon:
                         "required": ["subsection"],
                     },
                 },
-                # zoom_out
+                {
+                    "name": "zoom_out",
+                    "description": "Zoom out one level from the current zoom level.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                    },
+                },
                 # {
                 #     "name": "click_element",
                 #     "description": "Click on a specific element on the page",
@@ -209,6 +220,7 @@ class BrowserDaemon:
             "go_to_url": self.go_to_url,
             "skim": self.skim,
             "zoom_into_subsection": self.zoom_in,
+            "zoom_out": self.zoom_out,
         }
 
     @property
