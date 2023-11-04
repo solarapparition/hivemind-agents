@@ -218,6 +218,10 @@ class BrowserDaemon:
                                 "type": "string",
                                 "description": "A natural language description of the text field that uniquely identifies it."
                             },
+                            "text": {
+                                "type": "string",
+                                "description": "The text to type into the text field."
+                            }
                         },
                         "required": ["text_field_description"],
                     },
@@ -239,6 +243,7 @@ class BrowserDaemon:
             "zoom_into_subsection": self.zoom_in,
             "zoom_out": self.zoom_out,
             "click_element": self.click_element,
+            "type_text": self.type_text,
         }
 
     @property
