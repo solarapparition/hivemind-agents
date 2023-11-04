@@ -33,7 +33,7 @@ def traverse_filter(node: Tag) -> None:
             attrs_to_keep = {
                 k: v
                 for k, v in child.attrs.items()
-                if k in {"alt", "title"}
+                if k in {"alt", "title", "id"}
                 or k.startswith("aria-")
                 or k == "role"
                 or k == "aria-level"
