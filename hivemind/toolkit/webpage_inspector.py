@@ -4,18 +4,12 @@ from contextlib import suppress
 from pathlib import Path
 from dataclasses import dataclass
 
-import langchain
 from langchain.schema import SystemMessage, HumanMessage
 from langchain.chat_models import ChatAnthropic
-from langchain.cache import SQLiteCache
 
-from hivemind.config import LANGCHAIN_CACHE_DIR, TEST_DIR
+from hivemind.config import TEST_DIR
 from hivemind.toolkit.models import query_model
 from hivemind.toolkit.text_formatting import dedent_and_strip, extract_blocks
-
-langchain.llm_cache = SQLiteCache(
-    database_path=str(LANGCHAIN_CACHE_DIR / ".langchain.db")
-)
 
 
 class ZoomError(Exception):
@@ -32,9 +26,6 @@ class WebpageInspector:
 
     html: str
     """HTML of the webpage."""
-
-    message_history: list[str]
-    """Message history of the agent."""
 
     _breadcrumbs: list[str] | None = None
     """Breadcrumbs for where the agent is focused on the page."""
@@ -185,7 +176,7 @@ class WebpageInspector:
     @property
     def section_context(self) -> str:
         """Context for the current section of the page."""
-        return dedent_and_strip(
+        subsection_context = dedent_and_strip(
             """
             # CURRENT VIEW
             You are currently viewing the `{section}` section of the page. Here is the high-level outline of the `{section}` section:
@@ -268,7 +259,7 @@ class WebpageInspector:
 def test_zoom_out() -> None:
     """Test webpage inspector ability to zoom out of a section of the page."""
     page = Path(TEST_DIR / "cleaned_page.html").read_text(encoding="utf-8")
-    oracle = WebpageInspector(html=page, message_history=[])
+    oracle = WebpageInspector(html=page)
     oracle.zoom_in("Readme")
     print(oracle.section_outline)  # expect hierarchical outline of Readme section
     oracle.zoom_out()
@@ -282,7 +273,7 @@ def test_zoom_out() -> None:
 def test_zoom_in() -> None:
     """Test webpage inspector ability to zoom in on a section of the page."""
     page = Path(TEST_DIR / "cleaned_page.html").read_text(encoding="utf-8")
-    oracle = WebpageInspector(html=page, message_history=[])
+    oracle = WebpageInspector(html=page)
     oracle.zoom_in("Readme")
     print(oracle.section_outline)  # expect hierarchical outline of Readme section
     oracle.zoom_in("Installation")
@@ -292,7 +283,7 @@ def test_zoom_in() -> None:
 def test_section_outline() -> None:
     """Test webpage inspector ability to generate section outline."""
     page = Path(TEST_DIR / "cleaned_page.html").read_text(encoding="utf-8")
-    oracle = WebpageInspector(html=page, message_history=[])
+    oracle = WebpageInspector(html=page)
     print(
         oracle.extract_section_outline("Readme")
     )  # expect hierarchical outline of Readme section
@@ -301,5 +292,5 @@ def test_section_outline() -> None:
 def test_page_outline() -> None:
     """Test webpage inspector ability to generate page outline."""
     page = Path(TEST_DIR / "cleaned_page.html").read_text(encoding="utf-8")
-    oracle = WebpageInspector(html=page, message_history=[])
+    oracle = WebpageInspector(html=page)
     print(oracle.extract_page_outline())  # expect hierarchical outline of page

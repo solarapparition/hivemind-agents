@@ -3,9 +3,6 @@
 from typing import Callable
 from dataclasses import dataclass
 
-from os import makedirs
-from embedchain import App
-from embedchain.config import LlmConfig, ChromaDbConfig
 from autogen import (
     AssistantAgent,
     UserProxyAgent,

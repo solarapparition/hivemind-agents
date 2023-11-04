@@ -27,7 +27,7 @@ from hivemind.config import (
 from hivemind.toolkit.models import query_model, precise_model
 from hivemind.toolkit.text_formatting import dedent_and_strip, extract_blocks
 from hivemind.toolkit.autogen_support import get_last_user_reply
-from hivemind.toolkit.browserpilot_support import run_with_instructions
+from hivemind.toolkit.browserpilot_support import run_browserpilot_with_instructions
 from hivemind.toolkit.semantic_filtering import filter_semantic_html
 from hivemind.toolkit.webpage_inspector import WebpageInspector
 from hivemind.toolkit.text_validation import validate_text, find_llm_validation_error
@@ -214,7 +214,7 @@ class BrowserDaemon:
         }
 
     @property
-    def function_map(self) -> dict[str, Callable[[Any], Any]]:
+    def function_map(self) -> dict[str, Callable[..., Any]]:
         """Map names defined in the LLM config to the actual functions."""
         return {
             "go_to_url": self.go_to_url,
@@ -234,7 +234,8 @@ class BrowserDaemon:
             - zoom out on the page
             - read the text in a subsection of the page
             - scroll up or down
-            - interact with a specific element on the page (click, type, etc.)
+            - click on an element
+            - type into a text field
             """
         )
 
@@ -280,8 +281,9 @@ class BrowserDaemon:
 
     def go_to_url(self, url: str) -> str:
         """Go to a URL."""
-        instructions = f"Go to the URL `{url}`."
-        run_with_instructions(self.browserpilot_agent, instructions)
+        run_browserpilot_with_instructions(
+            self.browserpilot_agent, instructions=f"Go to the URL `{url}`."
+        )
         return f"Successfully navigated to `{url}`.\n\nThe current URL is: `{self.browserpilot_agent.driver.current_url}`.\n\nThe current page title is: `{self.browserpilot_agent.driver.title}`.\n\nYou are currently zoomed in on the following section of the page: `root` (the whole page)."
 
     def skim(self) -> str:
@@ -307,16 +309,21 @@ class BrowserDaemon:
         """Zoom in to a particular section of the page."""
         self.inspector.zoom_in(subsection)
         feedback = """
-        Successfully zoomed in.
         Current page title: `{title}`.
         Current URL: `{url}`.
-        You are zoomed in on the following section of the page: `{subsection}`.
+        You are {view_status} the following section of the page: `{subsection}`.
         Full zoom path to this section: `{zoom_path}`.
         """
-        return dedent_and_strip(feedback).format(
+        feedback = status_message + "\n\n" + dedent_and_strip(feedback)
+        return feedback.format(
             title=self.page_title,
             url=self.current_url,
-            subsection=subsection,
+            view_status="zoomed in on" if self.zoomed_in else "viewing",
+            subsection=(
+                self.current_subsection
+                if self.zoomed_in
+                else f"{self.current_subsection} (the whole page)"
+            ),
             zoom_path=self.zoom_path,
         )
 
@@ -325,7 +332,6 @@ class BrowserDaemon:
         message: str,
     ) -> tuple[str, Callable[[str], str]]:
         """Run the agent."""
-
         user_proxy = make_hivemind_user_proxy(
             agent=self,
             function_map=self.function_map,
@@ -391,7 +397,7 @@ def test_browserpilot() -> None:
         model_for_responses="gpt-3.5-turbo",
         user_data_dir=str(BROWSERPILOT_DATA_DIR),
     )
-    run_with_instructions(agent, "Go to https://google.com")
+    run_browserpilot_with_instructions(agent, "Go to https://google.com")
     agent.driver.quit()
 
 
@@ -420,7 +426,7 @@ def test_zoom_into_subsection() -> None:
     agent = BrowserDaemon()
     _, next_command = agent.run("Go to https://github.com/microsoft/autogen")
     result = next_command("Zoom into the 'Navigation' section.")
-    # result should include navigation due to returning zoom breadcrumbs
+    # result should include 'Navigation' within zoom breadcrumbs
     assert "Navigation" in result
 
 
@@ -431,50 +437,12 @@ def test() -> None:
     # test_go_to_url()
     # test_skim_page()
     # test_zoom_into_subsection()
+    # test_zoom_out()
+    # test_element_exception()
+    # test_check_element()
+    # test_click_element()
+    # test_inspector_source_update()
 
 
 if __name__ == "__main__":
     test()
-
-
-# TODO: zoom in to header
-# ....
-# TODO: workflow: "go to the autogen repository and figure out what i said about environments with decomposable tasks"
-# ....
-# TODO: work out sequence that takes a natural language input and converts it to a browserpilot command, then returns the result of that command
-# ....
-# TODO: convert action to command > use instructions from browserpilot readme
-# TODO: send command to browserpilot
-# TODO: MVP: purely text-based browser
-# > TODO: convert image of page to element list
-# > idea for screenreader
-
-
-# breakpoint()  # print(*(message.content for message in messages), sep="\n\n")
-
-# from browserpilot.agents.gpt_selenium_agent import GPTSeleniumAgent
-
-# instructions = """Go to Google.com
-# Find all textareas.
-# Find the first visible textarea.
-# Click on the first visible textarea.
-# Type in "buffalo buffalo buffalo buffalo buffalo" and press enter.
-# Wait 2 seconds."""
-
-# instructions_2 = """
-# Find all anchor elements that link to Wikipedia.
-# Click on the first one.
-# Wait for 2 seconds.
-# Scroll down the page.
-# Wait for 10 seconds."""
-
-# agent = GPTSeleniumAgent(
-#     instructions,
-#     ".data/drivers/chromedriver/chromedriver",
-#     close_after_completion=False,
-#     model_for_instructions="gpt-4",
-#     model_for_responses="gpt-3.5-turbo",
-# )
-# agent.run()
-# agent.set_instructions(instructions_2)
-# agent.run()
