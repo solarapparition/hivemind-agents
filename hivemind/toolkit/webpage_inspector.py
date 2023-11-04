@@ -187,10 +187,24 @@ class WebpageInspector:
             Here is the section breadcrumb trail, from the root of the page to the current section:
             {breadcrumbs}
             """
-        ).format(
-            section=self.current_section_name,
-            section_outline=self.section_outline,
-            breadcrumbs=self.breadcrumb_display,
+        )
+        root_page_context = dedent_and_strip(
+            """
+            # CURRENT VIEW
+            You are currently viewing the full page (the "root" level). Here is the high-level outline of the page:
+            ```
+            {section_outline}
+            ```
+            """
+        )
+        return (
+            subsection_context.format(
+                section=self.current_section_name,
+                section_outline=self.section_outline,
+                breadcrumbs=self.breadcrumb_display,
+            )
+            if self.breadcrumbs
+            else root_page_context.format(section_outline=self.section_outline)
         )
 
     @property
