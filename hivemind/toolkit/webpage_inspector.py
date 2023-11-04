@@ -152,7 +152,7 @@ class WebpageInspector:
     def current_section_name(self) -> str:
         """Return the name of the current section.
         Possibly not a unique identifier, so only use for display purposes."""
-        return self.breadcrumbs[-1]
+        return self.breadcrumbs[-1] if self.breadcrumbs else "Root page"
 
     @property
     def section_outlines(self) -> dict[tuple[str, ...], str]:
