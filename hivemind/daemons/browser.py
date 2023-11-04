@@ -129,10 +129,16 @@ class BrowserDaemon:
         """Return the page semantic source."""
         return filter_semantic_html(self.page_source).prettify()
 
-    @cached_property
+    _inspector: WebpageInspector | None = None
+
+    @property
     def inspector(self) -> WebpageInspector:
         """Return the webpage inspector."""
-        return WebpageInspector(self.page_semantic_source, [])
+        if self._inspector is None:
+            self._inspector = WebpageInspector(self.page_semantic_source, [])
+        if self._inspector.html != self.page_semantic_source:
+            self._inspector.update_page(self.page_semantic_source)
+        return self._inspector
 
     @property
     def work_dir(self) -> Path:
