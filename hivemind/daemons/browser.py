@@ -328,9 +328,18 @@ class BrowserDaemon:
         """Return the current zoom path."""
         return self.inspector.breadcrumb_display
 
-    def zoom_in(self, subsection: str) -> str:
-        """Zoom in to a particular section of the page."""
-        self.inspector.zoom_in(subsection)
+    @property
+    def current_subsection(self) -> str:
+        """Return the current subsection."""
+        return self.inspector.current_section_name
+
+    @property
+    def zoomed_in(self) -> bool:
+        """Return whether the user is zoomed in."""
+        return bool(self.inspector.breadcrumbs)
+
+    def action_feedback(self, status_message: str) -> str:
+        """Return feedback after some action."""
         feedback = """
         Current page title: `{title}`.
         Current URL: `{url}`.
