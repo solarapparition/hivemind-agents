@@ -532,6 +532,77 @@ def test_zoom_into_subsection() -> None:
     assert "Navigation" in result
 
 
+def test_zoom_out() -> None:
+    """Test zooming out of a view."""
+    agent = BrowserDaemon()
+    _, next_command = agent.run("Go to https://github.com/microsoft/autogen")
+    agent.zoom_in("Navigation")
+    result = next_command("Zoom out.")
+    assert "whole page" in result
+
+
+def test_element_exception() -> None:
+    """Test exception thrown for an element that isn't found."""
+    agent = BrowserDaemon()
+    instructions = """Go to Google.com
+    Find the button with the text "blah".
+    """
+    try:
+        run_browserpilot_with_instructions(
+            agent.browserpilot_agent, instructions=instructions
+        )
+    except Exception as error:  # pylint: disable=broad-except
+        if "Failed to execute" not in error.args[0]:
+            raise error
+
+
+def test_check_element() -> None:
+    """Test checking whether an element exists."""
+    agent = BrowserDaemon()
+    logger_level = browserpilot_logger.getEffectiveLevel()
+    # suppress logging since we expect exception messages
+    browserpilot_logger.setLevel(logging.WARNING)
+    agent.go_to_url("https://google.com")
+    assert not agent.element_found("a button with the text 'blah'")
+    assert agent.element_found("the 'About' link")
+    browserpilot_logger.setLevel(logger_level)
+
+
+def test_click_element() -> None:
+    """Test clicking on an element."""
+    agent = BrowserDaemon()
+    agent.go_to_url("https://github.com/microsoft/autogen")
+    result, _ = agent.run("Click on the 'Issues' link")
+    assert "Successfully clicked on element" in result
+
+
+def test_inspector_source_update() -> None:
+    """Test that the inspector source updates after the page source updates."""
+    agent = BrowserDaemon()
+    agent.go_to_url("https://github.com/microsoft/autogen")
+    agent.go_to_url("https://google.com")
+    assert (
+        agent.inspector.html == agent.page_semantic_source
+    ), "Inspector source not updated after page source changed."
+
+
+def test_type_text() -> None:
+    """Test typing text into some text field."""
+    agent = BrowserDaemon()
+    agent.go_to_url("https://google.com")
+    agent.click_element("textarea with the title of 'Search'")
+    agent.run("Type 'Hello world!' into the textarea with the title of 'Search'")
+    run_browserpilot_with_instructions(agent.browserpilot_agent, "Wait for 5 seconds.")
+    # this is a manual inspection test
+
+
+# ....
+# > TODO: ask a question <- should be qna oracle
+# > TODO: set memory folder
+# > TODO: refactor: update functions to return success/failure
+# > TODO: convert image of page to element list # needs gpt-4v
+
+
 def test() -> None:
     """Test the agent."""
     # test_root_breadcrumbs()
@@ -544,6 +615,7 @@ def test() -> None:
     # test_check_element()
     # test_click_element()
     # test_inspector_source_update()
+    # test_type_text()
 
 
 if __name__ == "__main__":
