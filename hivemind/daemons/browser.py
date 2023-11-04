@@ -194,23 +194,34 @@ class BrowserDaemon:
                         "properties": {},
                     },
                 },
-                # {
-                #     "name": "click_element",
-                #     "description": "Click on a specific element on the page",
-                #     "parameters": {
-                #         "type": "object",
-                #         "properties": {
-                #             "element_description": {
-                #                 "type": "string",
-                #                 "description": "A natural language description of the element to click on. Do not use full sentences. Example: \"the 'contact us' link\"",
-                #             }
-                #         },
-                #         "required": ["element_description"],
-                #     },
-                # },
-                # type_text
-                # read_section_text
-                # ask a question <- should be another agent
+                {
+                    "name": "click_element",
+                    "description": "Click on a specific element on the page",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "element_description": {
+                                "type": "string",
+                                "description": "A natural language description of the element that uniquely identifies it on the page. If using the element text, always use the exact text. Example: \"the 'Contact Us' link\". Do not use full sentences.",
+                            }
+                        },
+                        "required": ["element_description"],
+                    },
+                },
+                {
+                    "name": "type_text",
+                    "description": "Type text into a text field.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "text_field_description": {
+                                "type": "string",
+                                "description": "A natural language description of the text field that uniquely identifies it."
+                            },
+                        },
+                        "required": ["text_field_description"],
+                    },
+                },
             ],
             "raise_on_ratelimit_or_timeout": None,
             "request_timeout": 600,
@@ -227,6 +238,7 @@ class BrowserDaemon:
             "skim": self.skim,
             "zoom_into_subsection": self.zoom_in,
             "zoom_out": self.zoom_out,
+            "click_element": self.click_element,
         }
 
     @property
@@ -331,6 +343,76 @@ class BrowserDaemon:
                 else f"{self.current_subsection} (the whole page)"
             ),
             zoom_path=self.zoom_path,
+        )
+
+    def zoom_in(self, subsection: str) -> str:
+        """Zoom in to a particular section of the page."""
+        self.inspector.zoom_in(subsection)
+        return self.action_feedback(status_message="Successfully zoomed in.")
+
+    def zoom_out(self) -> str:
+        """Zoom out of the current view."""
+        self.inspector.zoom_out()
+
+        return self.action_feedback(status_message="Successfully zoomed out.")
+
+    def element_found(self, element_description: str) -> bool:
+        """Check whether an element exists."""
+        instructions = f"""Find the {element_description}". Do not click on or otherwise interact with it."""
+
+        # instructions = f"""Find the element that matches the following identifying description: "{element_description}". Do not click on or otherwise interact with it."""
+        try:
+            run_browserpilot_with_instructions(
+                self.browserpilot_agent, instructions=instructions
+            )
+            return True
+        except Exception as error:  # pylint: disable=broad-except
+            if "Failed to execute" in error.args[0]:
+                return False
+            raise error
+
+    def element_not_found_message(self, element_description: str) -> str:
+        """Return the message to display when an element isn't found."""
+        return f'I was unable to find an element that matches the following identifying description: "{element_description}"\nPlease note that this does NOT mean the element doesn\'t exist. It may be possible to find the element by adjusting the identifying description, such as changing the text to match the exact text of the element, or using a different element tag, etc.'
+
+    def interact_with_element(
+        self, element_description: str, instructions: str, success_message: str
+    ) -> dict[str, str | bool]:
+        """Use the browserpilot agent to interact with an element."""
+        if not self.element_found(element_description):
+            return {
+                "success": False,
+                "message": self.action_feedback(
+                    status_message=self.element_not_found_message(element_description)
+                ),
+            }
+        error_message = run_browserpilot_with_instructions(
+            self.browserpilot_agent, instructions=instructions
+        )
+        success = not error_message
+        return {
+            "success": success,
+            "message": self.action_feedback(
+                status_message=success_message if success else error_message
+            ),
+        }
+
+    def click_element(self, element_description: str) -> dict[str, str | bool]:
+        """Click an element with a particular description."""
+        return self.interact_with_element(
+            element_description=element_description,
+            instructions=f"Click on the {element_description}.",
+            success_message="Successfully clicked on element.",
+        )
+
+    def type_text(
+        self, text_field_description: str, text: str
+    ) -> dict[str, str | bool]:
+        """Type text into a text field."""
+        return self.interact_with_element(
+            element_description=text_field_description,
+            instructions=f"Type the following text into the {text_field_description}: `{text}`.",
+            success_message="Successfully typed text into text field.",
         )
 
     def run(
