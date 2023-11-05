@@ -1,16 +1,14 @@
 """Agent that can browse a webpage and communicate its state."""
 
-from typing import Callable, Any, Protocol, Sequence
+from typing import Callable, Any, Protocol
 from functools import cached_property
-from contextlib import suppress
 from pathlib import Path
 from dataclasses import dataclass
 import logging
 
 import langchain
 from autogen import UserProxyAgent, AssistantAgent
-from langchain.schema import SystemMessage, HumanMessage, BaseMessage, AIMessage
-from langchain.chat_models import ChatAnthropic
+from langchain.schema import SystemMessage
 from langchain.cache import SQLiteCache
 from browserpilot.agents.gpt_selenium_agent import (
     GPTSeleniumAgent,
@@ -20,30 +18,25 @@ from browserpilot.agents.gpt_selenium_agent import (
 from hivemind.config import (
     BASE_WORK_DIR,
     LANGCHAIN_CACHE_DIR,
-    TEST_DIR,
     BROWSERPILOT_DATA_DIR,
     CHROMEDRIVER_LOCATION,
 )
-from hivemind.toolkit.models import query_model, precise_model
-from hivemind.toolkit.text_formatting import dedent_and_strip, extract_blocks
+from hivemind.toolkit.text_formatting import dedent_and_strip
 from hivemind.toolkit.autogen_support import get_last_user_reply
 from hivemind.toolkit.browserpilot_support import run_browserpilot_with_instructions
 from hivemind.toolkit.semantic_filtering import filter_semantic_html
 from hivemind.toolkit.webpage_inspector import WebpageInspector
 from hivemind.toolkit.text_validation import validate_text, find_llm_validation_error
-
-langchain.llm_cache = SQLiteCache(
-    database_path=str(LANGCHAIN_CACHE_DIR / ".langchain.db")
-)
-
 from hivemind.toolkit.autogen_support import (
     is_termination_msg,
     ConfigDict,
     DEFAULT_CONFIG_LIST,
-    DEFAULT_LLM_CONFIG as llm_config,
     continue_agent_conversation,
 )
 
+langchain.llm_cache = SQLiteCache(
+    database_path=str(LANGCHAIN_CACHE_DIR / ".langchain.db")
+)
 
 class HivemindAgent(Protocol):
     """Interface for Hivemind agents."""
