@@ -1,6 +1,6 @@
 """Interface for optimizing a semantic component of a system (function, prompt, etc.) using a large language model."""
 
-from typing import Sequence, Protocol, Any, NewType, Iterable
+from typing import Sequence, Any, NewType, Iterable
 from itertools import chain
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
@@ -28,7 +28,7 @@ class SemanticComponent:
     evaluation: Evaluation
 
 
-ComponentPool = Sequence[SemanticComponent]
+ComponentPool = Iterable[SemanticComponent]
 
 
 class SemanticComponentOptimizer(ABC):
@@ -84,13 +84,13 @@ class SemanticComponentOptimizer(ABC):
 
     @abstractmethod
     def filter_component_pool(
-        self, components: Iterable[SemanticComponent]
+        self, components: ComponentPool
     ) -> ComponentPool:
         """Remove components from the component pool that are not up to standard."""
 
     def improve_component_pool(
         self,
-        components: Sequence[SemanticComponent],
+        components: ComponentPool,
     ) -> ComponentPool:
         """Improve a pool of components."""
         improvement_candidates = self.select_improvement_candidates(components)

@@ -66,7 +66,8 @@ user_proxy = UserProxyAgent(
     # },
 )
 
-def run(query: str, color: str=DEFAULT_COLOR, printout: bool = True) -> str:
+
+def run(query: str, color: str = DEFAULT_COLOR, printout: bool = True) -> str:
     """Run the agent."""
     user_proxy.initiate_chat(
         assistant,
