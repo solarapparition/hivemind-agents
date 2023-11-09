@@ -8,7 +8,7 @@ ConfigDict = dict[str, Any]
 DEFAULT_CONFIG_LIST: list[ConfigDict] = config_list_from_json(
     "OAI_CONFIG_LIST",
     filter_dict={
-        "model": ["gpt4", "gpt-4-32k"],
+        "model": ["gpt4", "gpt-4", "gpt-4-32k"],
     },
 )
 

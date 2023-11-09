@@ -21,16 +21,16 @@ Response style defined:
 """
 
 MESSAGE_TEMPLATE = """
-# CONTEXT FOR OVERALL TASK:
+CONTEXT FOR OVERALL TASK:
 {overall_context}
 
-# PLAN AND EXECUTION STATUS:
-{task_plan_statux}
+PLAN AND EXECUTION STATUS:
+{task_plan_status}
 
-# CONTEXT FOR SUBTASK {subtask_number}:
+CONTEXT FOR SUBTASK {subtask_number}:
 {subtask_context}
 
-# REQUEST:
+REQUEST:
 {request}
 """
 """The idea here is to send a request to the agent via this template, update the context and status with the response and your own progress, then rinse and repeat."""
@@ -41,7 +41,7 @@ llm_config = {
     "raise_on_ratelimit_or_timeout": None,
     "request_timeout": 300,
     "seed": 42,
-    "config_list": config_list_from_models(model_list=["gpt-4"]),
+    "config_list": config_list_from_models(model_list=["gpt-4-1106-preview"]),
     "use_cache": True,
     "temperature": 0,
 }
