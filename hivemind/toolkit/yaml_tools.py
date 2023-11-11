@@ -26,7 +26,5 @@ def save_yaml(data: Mapping[str, Any], location: Path) -> None:
 
 def dump_yaml_str(data: Mapping[str, Any] | list[Any]) -> str:
     """Dump yaml as a string."""
-    stream = StringIO()
-    yaml.dump(data, stream)
-    value = stream.getvalue().strip()
-    return value
+    yaml.dump(data, stream := StringIO())
+    return stream.getvalue().strip()
