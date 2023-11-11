@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import NewType
+from typing import NewType, NamedTuple
 import random
 import string
 
@@ -20,6 +20,13 @@ def generate_aranea_id() -> AraneaId:
     return AraneaId(f"{timestamp}-{random_str}")
 
 
+class WorkValidation(NamedTuple):
+    """Validation of work done by agent."""
+
+    result: bool
+    feedback: str
+
+
 @dataclass
 class Aranea:
     """A recursively specializing agent."""
@@ -28,7 +35,7 @@ class Aranea:
     task_history: list[TaskId]
     core_instructions: str
     learnings: str
-    serialization_location: Path = Path(".")
+    serialization_dir: Path = Path(".")
     id: AraneaId = field(default_factory=generate_aranea_id)
     serialized_attributes: tuple[str, ...] = (
         "id",
@@ -38,20 +45,66 @@ class Aranea:
         "learnings",
     )
 
-    def serialize(self) -> str:
+    @property
+    def serialization_location(self) -> Path:
+        """Return the location where the agent should be serialized."""
+        return self.serialization_dir / f"{self.id}.yml"
+
+    def serialize(self) -> None:
         """Serialize the agent to YAML."""
         agent_data = {
             k: v for k, v in asdict(self).items() if k in self.serialized_attributes
         }
-        return yaml.dump(agent_data, self.serialization_location)
+        yaml.dump(agent_data, self.serialization_location)
+
+    def validate_work(self, task_data: str) -> WorkValidation:
+        """Validate the work done by the agent."""
+        print(
+            f'Here is the message for the task completion by the agent:\n"{task_data}"'
+        )
+        while True:
+            validation_input: str = (
+                input("Was the task successfully completed? (True/False): ")
+                .strip()
+                .lower()
+            )
+            if validation_input in {"true", "false"}:
+                validation_result: bool = validation_input == "true"
+                break
+            print("Invalid input. Please enter 'True' or 'False'.")
+
+        feedback: str = input("Provide feedback: ")
+        return WorkValidation(validation_result, feedback)
 
 
-# Usage
-agent = Aranea(
-    rank=0,
-    task_history=[TaskId("task1"), TaskId("task2")],
-    core_instructions="Primary directive here.",
-    learnings="Adaptations from past tasks.",
-)
+def test_serialize() -> None:
+    """Test serialization."""
+    test_dir = Path(".data/test/agents")
+    agent = Aranea(
+        rank=0,
+        task_history=[TaskId("task1"), TaskId("task2")],
+        core_instructions="Primary directive here.",
+        learnings="Adaptations from past tasks.",
+        serialization_dir=test_dir,
+    )
+    agent.serialize()
+    assert agent.serialization_location.exists()
 
-agent.serialize()
+
+def test() -> None:
+    """Run tests."""
+    # test_serialize()
+
+
+if __name__ == "__main__":
+    test()
+
+# ....
+# Subtask Extraction: Broken down based on orthogonality and input/output footprint criteria
+# > workflow: get task -> extract subtask -> query subagent db -> select subagent -> delegate subtask -> ...
+# > Includes 'user proxy' actions selection and 'assistant' subagent delegation
+# Agent Ranking System: Prevents infinite loops, with higher-ranked agents delegating to lower-ranked ones
+# > Vector database used for storing summaries of individual Aranea agents
+# New agent initially has rank of their creator's rank minus one. Post first successful task completion, rank adjusts based on the highest rank of its subagents used
+# Aranea agents equipped with an `escalate` function to route questions back to their caller during task execution
+# If an Aranea agent receives an escalated question, it either responds or propagates the query up, eventually reaching the task owner
