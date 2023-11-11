@@ -231,7 +231,7 @@ class ResourceType(Enum):
 
 def generate_timestamp_id() -> str:
     """Generate an id based on the current timestamp."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M-%S-%f")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M-%S-%f")
 
 
 def retrieve_resource_text(uri: str, resource_type: ResourceType) -> str:

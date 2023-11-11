@@ -17,7 +17,7 @@ def generate_aranea_id() -> AraneaId:
     """Generate an ID for an agent."""
     timestamp = generate_timestamp_id()
     random_str = "".join(random.choices(string.ascii_uppercase + string.digits, k=5))
-    return AraneaId(f"{timestamp}-{random_str}")
+    return AraneaId(f"aranea_{timestamp}_{random_str}")
 
 
 class WorkValidation(NamedTuple):
@@ -29,13 +29,12 @@ class WorkValidation(NamedTuple):
 
 @dataclass
 class Aranea:
-    """A recursively specializing agent."""
+    """A recursively auto-specializing agent."""
 
-    rank: int
-    task_history: list[TaskId]
     core_instructions: str
     learnings: str
-    serialization_dir: Path = Path(".")
+    rank: int
+    task_history: list[TaskId]
     id: AraneaId = field(default_factory=generate_aranea_id)
     serialized_attributes: tuple[str, ...] = (
         "id",
@@ -44,6 +43,7 @@ class Aranea:
         "core_instructions",
         "learnings",
     )
+    serialization_dir: Path = Path(".")
 
     @property
     def serialization_location(self) -> Path:
@@ -100,8 +100,8 @@ if __name__ == "__main__":
     test()
 
 # ....
+# > workflow: get task -> ask questions -> extract subtask -> query subagent db -> select subagent -> delegate subtask -> ...
 # Subtask Extraction: Broken down based on orthogonality and input/output footprint criteria
-# > workflow: get task -> extract subtask -> query subagent db -> select subagent -> delegate subtask -> ...
 # > Includes 'user proxy' actions selection and 'assistant' subagent delegation
 # Agent Ranking System: Prevents infinite loops, with higher-ranked agents delegating to lower-ranked ones
 # > Vector database used for storing summaries of individual Aranea agents
