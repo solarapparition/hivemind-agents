@@ -31,6 +31,7 @@ class WorkValidation(NamedTuple):
 class Aranea:
     """A recursively auto-specializing agent."""
 
+    task: str
     core_instructions: str
     learnings: str
     rank: int
@@ -81,6 +82,7 @@ def test_serialize() -> None:
     """Test serialization."""
     test_dir = Path(".data/test/agents")
     agent = Aranea(
+        task="task3",
         rank=0,
         task_history=[TaskId("task1"), TaskId("task2")],
         core_instructions="Primary directive here.",
