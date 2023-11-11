@@ -55,7 +55,7 @@ assistant = AssistantAgent(
 
 user_proxy = UserProxyAgent(
     name="John Cha",
-    human_input_mode="NEVER",
+    human_input_mode="ALWAYS",
     max_consecutive_auto_reply=0,
     is_termination_msg=is_termination_msg,
     code_execution_config={"work_dir": DEFAULT_WORK_DIR},
@@ -73,9 +73,9 @@ def run(query: str, color: str = DEFAULT_COLOR, printout: bool = True) -> str:
         assistant,
         message=dedent_and_strip(query),
         clear_history=True,
-        silent=True,
+        # silent=True,
     )
     output = str(user_proxy.chat_messages[assistant][-1]["content"])
-    if printout:
-        print(color + output + Fore.RESET)
+    # if printout:
+    #     print(color + output + Fore.RESET)
     return output
