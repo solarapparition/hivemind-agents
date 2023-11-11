@@ -7,7 +7,8 @@ from langchain.chat_models import ChatOpenAI, ChatAnthropic
 
 precise_model = ChatOpenAI(temperature=0, model_name="gpt-4", verbose=False)  # type: ignore
 creative_model = ChatOpenAI(temperature=0.7, model_name="gpt-4", verbose=False)  # type: ignore
-super_creative_model = ChatOpenAI(temperature=1.0, model_name="gpt-4", verbose=False)  # type: ignore
+# super_creative_model = ChatOpenAI(temperature=1.0, model_name="gpt-4", verbose=False)  # type: ignore
+super_creative_model = ChatOpenAI(temperature=1.0, model_name="gpt-4-1106-preview", verbose=False)  # type: ignore
 fast_model = ChatOpenAI(temperature=0, model_name="gpt-3.5-turbo", verbose=False)  # type: ignore
 broad_model = ChatOpenAI(temperature=0, model_name="gpt-3.5-turbo-16k", verbose=False)  # type: ignore
 super_broad_model = ChatAnthropic(temperature=0, model="claude-instant-1", max_tokens_to_sample=40000, verbose=False)  # type: ignore

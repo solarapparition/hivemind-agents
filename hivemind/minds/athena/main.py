@@ -253,6 +253,7 @@ def next_interaction_messaging(agent_name: str, user_name: str) -> tuple[SystemM
     ```message
     <message>
     ```
+    The results of all 5 steps above must be in separate blocks.
     """
     messages = (
         SystemMessage(
@@ -1283,7 +1284,10 @@ def run_athena() -> None:
         )
         message = extract_block(result, "message")
         message = ExchangeMessage(AGENT_NAME, message)
-        goal = extract_blocks(result, "thought")[2]
+        try:
+            goal = extract_blocks(result, "thought")[2]
+        except IndexError:
+            breakpoint()
         if not "Goals:" in goal:
             print("No goals found in generated response.")
             breakpoint()
