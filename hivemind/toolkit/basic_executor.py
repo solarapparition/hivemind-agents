@@ -43,7 +43,7 @@ llm_config = {
     "seed": 42,
     "config_list": config_list_from_models(model_list=["gpt-4-1106-preview"]),
     "use_cache": True,
-    "temperature": 0,
+    "temperature": 0.1,
 }
 
 
