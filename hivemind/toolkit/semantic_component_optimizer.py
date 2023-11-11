@@ -1,6 +1,6 @@
 """Interface for optimizing a semantic component of a system (function, prompt, etc.) using a large language model."""
 
-from typing import Sequence, Any, NewType, Iterable
+from typing import Any, NewType, Iterable
 from itertools import chain
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
@@ -37,7 +37,7 @@ class SemanticComponentOptimizer(ABC):
     @abstractmethod
     def generate_component_variations(
         self, component: ComponentContent, context: OntologicalContext
-    ) -> list[ComponentContent]:
+    ) -> Iterable[ComponentContent]:
         """Attempt to create improved versions of a component."""
 
     @abstractmethod
@@ -52,7 +52,9 @@ class SemanticComponentOptimizer(ABC):
 
     @abstractmethod
     def ontological_context(self, component: ComponentContent) -> OntologicalContext:
-        """Create the ontological context for the component."""
+        """Create the ontological context for the component.
+        The ontological context is the subset of the environment that is needed to understand what the component does in the environment, and would usually be some. For example, if the component is a function, the ontological context could be other functions that use it and variables that are relevant to it.
+        """
 
     def generate_improved_components(
         self,
@@ -80,13 +82,11 @@ class SemanticComponentOptimizer(ABC):
 
     @abstractmethod
     def select_improvement_candidates(self, components: ComponentPool) -> ComponentPool:
-        """Select components from the component pool that would be improved."""
+        """Select components from the component pool that would be improved. Usually these would be components with high ratings."""
 
     @abstractmethod
-    def filter_component_pool(
-        self, components: ComponentPool
-    ) -> ComponentPool:
-        """Remove components from the component pool that are not up to standard."""
+    def filter_component_pool(self, components: ComponentPool) -> ComponentPool:
+        """Remove components from the component pool that are not up to standard. Usually these would be components with low ratings."""
 
     def improve_component_pool(
         self,
