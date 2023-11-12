@@ -93,7 +93,9 @@ class Aranea:
     @classmethod
     def load(cls, blueprint_location: Path, task: str) -> Self:
         """Deserialize an Aranea agent from a YAML file."""
-        return cls(blueprint=Blueprint(**yaml.load(blueprint_location)), task=task)
+        blueprint_data = yaml.load(blueprint_location)
+        blueprint_data["task_history"] = tuple(blueprint_data["task_history"])
+        return cls(blueprint=Blueprint(**blueprint_data), task=task)
 
     def __hash__(self) -> int:
         """Hash the agent."""
@@ -135,13 +137,43 @@ def test_serialize() -> None:
     assert aranea_agent.serialization_location.exists()
 
 
+def test_deserialize() -> None:
+    """Test deserialization."""
+    # Setup: Serialize an agent to YAML for testing deserialization
+    test_dir = ".data/test/agents"
+    blueprint = Blueprint(
+        id=generate_aranea_id(),
+        rank=0,
+        task_history=(TaskId("task1"), TaskId("task2")),
+        instructions="Primary directive here.",
+        learnings="Adaptations from past tasks.",
+        serialization_dir=test_dir,
+    )
+    aranea_agent = Aranea(task="task3", blueprint=blueprint)
+    aranea_agent.save()
+
+    # Test: Deserialize the agent from the YAML file
+    deserialized_agent: Aranea = Aranea.load(
+        aranea_agent.serialization_location, aranea_agent.task
+    )
+
+    # Verify: Deserialized agent matches the original
+    assert deserialized_agent.id == aranea_agent.id
+    assert deserialized_agent.rank == aranea_agent.rank
+    assert deserialized_agent.task_history == aranea_agent.task_history
+    assert deserialized_agent.instructions == aranea_agent.instructions
+    assert deserialized_agent.learnings == aranea_agent.learnings
+    assert deserialized_agent.task == aranea_agent.task
+
+
 def test_ask_question() -> None:
     """Ask a question to the task owner."""
 
 
 def test() -> None:
     """Run tests."""
-    test_serialize()
+    # test_serialize()
+    # test_deserialize()
 
 
 if __name__ == "__main__":
