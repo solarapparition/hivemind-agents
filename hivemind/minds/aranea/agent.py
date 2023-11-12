@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import NewType, NamedTuple, Sequence, Any, Self
+from typing import NewType, NamedTuple, Sequence, Any, Self, Protocol
 import random
 import string
 
@@ -40,12 +40,29 @@ class Blueprint:
     id: AraneaId = field(default_factory=generate_aranea_id)
 
 
+class TaskOwner(Protocol):
+    """The owner of a task that you can ask questions to."""
+
+    def answer_question(self, question: str) -> str:
+        """Answer a question regarding the task."""
+        raise NotImplementedError
+
+
+@dataclass
+class Task:
+    """A task for an Aranea agent."""
+
+    id: TaskId
+    description: str
+    owner: TaskOwner
+
+
 @dataclass
 class Aranea:
     """A recursively auto-specializing agent."""
 
     blueprint: Blueprint
-    task: str
+    task: Task
 
     @property
     def id(self) -> AraneaId:
@@ -91,7 +108,7 @@ class Aranea:
         yaml.dump(asdict(self.blueprint), self.serialization_location)
 
     @classmethod
-    def load(cls, blueprint_location: Path, task: str) -> Self:
+    def load(cls, blueprint_location: Path, task: Task) -> Self:
         """Deserialize an Aranea agent from a YAML file."""
         blueprint_data = yaml.load(blueprint_location)
         blueprint_data["task_history"] = tuple(blueprint_data["task_history"])
@@ -100,6 +117,10 @@ class Aranea:
     def __hash__(self) -> int:
         """Hash the agent."""
         return hash(self.blueprint)
+
+    def ask_question(self, question: str) -> str:
+        """Ask a question regarding the task to the owner of the task."""
+        return self.task.owner.answer_question(question)
 
     def validate_work(self, task_data: str) -> WorkValidation:
         """Validate the work done by the agent."""
@@ -121,6 +142,23 @@ class Aranea:
         return WorkValidation(validation_result, feedback)
 
 
+# Testing: will need to be converted to Pytest eventually
+
+class TestTaskOwner:
+    """Test task owner."""
+
+    def answer_question(self, question: str) -> str:
+        """Answer a question regarding the task."""
+        return f"Answer to '{question}'"
+
+
+test_task = Task(
+    id=TaskId("task3"),
+    description="A task for an Aranea agent.",
+    owner=TestTaskOwner(),
+)
+
+
 def test_serialize() -> None:
     """Test serialization."""
     test_dir = ".data/test/agents"
@@ -132,7 +170,7 @@ def test_serialize() -> None:
         learnings="Adaptations from past tasks.",
         serialization_dir=test_dir,
     )
-    aranea_agent = Aranea(task="task3", blueprint=blueprint)
+    aranea_agent = Aranea(task=test_task, blueprint=blueprint)
     aranea_agent.save()
     assert aranea_agent.serialization_location.exists()
 
@@ -149,7 +187,7 @@ def test_deserialize() -> None:
         learnings="Adaptations from past tasks.",
         serialization_dir=test_dir,
     )
-    aranea_agent = Aranea(task="task3", blueprint=blueprint)
+    aranea_agent = Aranea(task=test_task, blueprint=blueprint)
     aranea_agent.save()
 
     # Test: Deserialize the agent from the YAML file
