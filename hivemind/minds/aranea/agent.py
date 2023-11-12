@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import NewType, NamedTuple
+from typing import NewType, NamedTuple, Sequence, Any
 import random
 import string
 
@@ -11,6 +11,7 @@ from hivemind.toolkit.yaml_tools import yaml
 
 AraneaId = NewType("AraneaId", str)
 TaskId = NewType("TaskId", str)
+TaskHistory = Sequence[TaskId]
 
 
 def generate_aranea_id() -> AraneaId:
@@ -27,36 +28,67 @@ class WorkValidation(NamedTuple):
     feedback: str
 
 
+@dataclass(frozen=True)
+class Blueprint:
+    """A blueprint for an Aranea agent."""
+
+    rank: int
+    task_history: TaskHistory
+    instructions: str
+    learnings: str
+    serialization_dir: str
+    id: AraneaId = field(default_factory=generate_aranea_id)
+
+
 @dataclass
 class Aranea:
     """A recursively auto-specializing agent."""
 
+    blueprint: Blueprint
     task: str
-    core_instructions: str
-    learnings: str
-    rank: int
-    task_history: list[TaskId]
-    id: AraneaId = field(default_factory=generate_aranea_id)
-    serialized_attributes: tuple[str, ...] = (
-        "id",
-        "rank",
-        "task_history",
-        "core_instructions",
-        "learnings",
-    )
-    serialization_dir: Path = Path(".")
+
+    @property
+    def id(self) -> AraneaId:
+        """Id of the agent."""
+        return self.blueprint.id
+
+    @property
+    def rank(self) -> int:
+        """Rank of the agent."""
+        return self.blueprint.rank
+
+    @property
+    def task_history(self) -> TaskHistory:
+        """History of tasks completed by the agent."""
+        return self.blueprint.task_history
+
+    @property
+    def instructions(self) -> str:
+        """Instructions for the agent."""
+        return self.blueprint.instructions
+
+    @property
+    def learnings(self) -> str:
+        """Learnings from past tasks."""
+        return self.blueprint.learnings
+
+    @property
+    def serialization_dir(self) -> Path:
+        """Directory where the agent is serialized."""
+        return Path(self.blueprint.serialization_dir)
 
     @property
     def serialization_location(self) -> Path:
         """Return the location where the agent should be serialized."""
         return self.serialization_dir / f"{self.id}.yml"
 
-    def serialize(self) -> None:
+    def serialize(self) -> dict[str, Any]:
+        """Serialize the agent to a dict."""
+        return asdict(self.blueprint)
+
+    def save(self) -> None:
         """Serialize the agent to YAML."""
-        agent_data = {
-            k: v for k, v in asdict(self).items() if k in self.serialized_attributes
-        }
-        yaml.dump(agent_data, self.serialization_location)
+        yaml.dump(asdict(self.blueprint), self.serialization_location)
 
     def validate_work(self, task_data: str) -> WorkValidation:
         """Validate the work done by the agent."""
@@ -80,33 +112,28 @@ class Aranea:
 
 def test_serialize() -> None:
     """Test serialization."""
-    test_dir = Path(".data/test/agents")
-    agent = Aranea(
-        task="task3",
+    test_dir = ".data/test/agents"
+    blueprint = Blueprint(
+        id=generate_aranea_id(),
         rank=0,
-        task_history=[TaskId("task1"), TaskId("task2")],
-        core_instructions="Primary directive here.",
+        task_history=(TaskId("task1"), TaskId("task2")),
+        instructions="Primary directive here.",
         learnings="Adaptations from past tasks.",
         serialization_dir=test_dir,
     )
-    agent.serialize()
-    assert agent.serialization_location.exists()
+    aranea_agent = Aranea(task="task3", blueprint=blueprint)
+    aranea_agent.save()
+    assert aranea_agent.serialization_location.exists()
+
+
+def test_ask_question() -> None:
+    """Ask a question to the task owner."""
 
 
 def test() -> None:
     """Run tests."""
-    # test_serialize()
+    test_serialize()
 
 
 if __name__ == "__main__":
     test()
-
-# ....
-# > workflow: get task -> ask questions -> extract subtask -> query subagent db -> select subagent -> delegate subtask -> ...
-# Subtask Extraction: Broken down based on orthogonality and input/output footprint criteria
-# > Includes 'user proxy' actions selection and 'assistant' subagent delegation
-# Agent Ranking System: Prevents infinite loops, with higher-ranked agents delegating to lower-ranked ones
-# > Vector database used for storing summaries of individual Aranea agents
-# New agent initially has rank of their creator's rank minus one. Post first successful task completion, rank adjusts based on the highest rank of its subagents used
-# Aranea agents equipped with an `escalate` function to route questions back to their caller during task execution
-# If an Aranea agent receives an escalated question, it either responds or propagates the query up, eventually reaching the task owner
