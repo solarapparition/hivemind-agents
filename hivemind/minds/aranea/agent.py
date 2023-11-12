@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import NewType, NamedTuple, Sequence, Any
+from typing import NewType, NamedTuple, Sequence, Any, Self
 import random
 import string
 
@@ -89,6 +89,15 @@ class Aranea:
     def save(self) -> None:
         """Serialize the agent to YAML."""
         yaml.dump(asdict(self.blueprint), self.serialization_location)
+
+    @classmethod
+    def load(cls, blueprint_location: Path, task: str) -> Self:
+        """Deserialize an Aranea agent from a YAML file."""
+        return cls(blueprint=Blueprint(**yaml.load(blueprint_location)), task=task)
+
+    def __hash__(self) -> int:
+        """Hash the agent."""
+        return hash(self.blueprint)
 
     def validate_work(self, task_data: str) -> WorkValidation:
         """Validate the work done by the agent."""
