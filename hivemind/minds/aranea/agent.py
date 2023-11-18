@@ -5,12 +5,12 @@ from enum import Enum
 from dataclasses import dataclass, asdict, field
 from functools import cached_property
 from pathlib import Path
-from typing import NewType, NamedTuple, Sequence, Any, Self, Protocol, TypeVar
+from typing import NewType, NamedTuple, Sequence, Any, Self, Protocol, TypeVar, Callable
 from uuid import uuid4 as generate_uuid
 
 from hivemind.toolkit.text_formatting import dedent_and_strip
 from hivemind.toolkit.yaml_tools import yaml
-from hivemind.toolkit.types import HivemindAgent
+from hivemind.toolkit.types import HivemindAgent, HivemindReply
 
 BlueprintId = NewType("BlueprintId", str)
 TaskId = NewType("TaskId", str)
@@ -35,11 +35,13 @@ class TaskValidation(NamedTuple):
 class Blueprint:
     """A blueprint for an Aranea agent."""
 
+    name: str
     rank: int
     task_history: TaskHistory
     reasoning: str
     knowledge: str
     serialization_dir: str
+    output_dir: str
     id: BlueprintId = field(default_factory=lambda: generate_aranea_id(BlueprintId))
 
 
@@ -73,9 +75,12 @@ class TaskDiscussionStatus(Enum):
 def replace_agent_id(
     text_to_replace: str, replace_with: str, agent_id: RuntimeId
 ) -> str:
-    """Replace agent id with 'You'."""
-    pattern = f"agent {agent_id}|Agent {agent_id}"
-    return re.sub(pattern, replace_with, text_to_replace)
+    """Replace agent id with some other string."""
+    return (
+        text_to_replace.replace(f"agent {agent_id}", replace_with)
+        .replace(f"Agent {agent_id}", replace_with.title())
+        .replace(agent_id, replace_with)
+    )
 
 
 @dataclass
@@ -101,8 +106,8 @@ class TaskValidator(Protocol):
         raise NotImplementedError
 
 
-class HumanTaskOwner:
-    """A human task owner. Serves as both the owner and validator of a task."""
+class Human:
+    """A human part of the hivemind. Can be used as either the owner or validator of a task."""
 
     def answer_question(self, question: str) -> str:
         """Answer a question regarding the task."""
@@ -124,7 +129,6 @@ class HumanTaskOwner:
 
         feedback: str = input("Provide feedback: ")
         return TaskValidation(validation_result, feedback)
-
 
 
 @dataclass
@@ -192,7 +196,7 @@ class Task:
     notes: dict[str, str] = field(default_factory=dict)
     work_status: TaskWorkStatus = TaskWorkStatus.NEW
     discussion_status: TaskDiscussionStatus = TaskDiscussionStatus.NONE
-    validator: TaskValidator = field(default_factory=HumanTaskOwner)
+    validator: TaskValidator = field(default_factory=Human)
 
     @cached_property
     def event_log(self) -> EventLog:
@@ -418,6 +422,16 @@ class Aranea:
         """Return the location where the agent should be serialized."""
         return self.serialization_dir / f"{self.blueprint.id}.yml"
 
+    @property
+    def name(self) -> str:
+        """Name of the agent."""
+        return self.blueprint.name
+
+    @property
+    def output_dir(self) -> Path:
+        """Directory for the agent's output files."""
+        return Path(self.blueprint.output_dir)
+
     def serialize(self) -> dict[str, Any]:
         """Serialize the agent to a dict."""
         return asdict(self.blueprint)
@@ -437,6 +451,10 @@ class Aranea:
         """Ask a question regarding the task to the owner of the task."""
         return self.task.owner.answer_question(question)
 
+    def run(self, message: str) -> HivemindReply:
+        """Run the agent."""
+        breakpoint()
+
 
 example_test_task = Task(
     name="Reorganize files on a flash drive",
@@ -444,7 +462,7 @@ example_test_task = Task(
         information="The files on the flash drive are currently unorganized.",
         definition_of_done="The files on the flash drive are organized.",
     ),
-    owner=HumanTaskOwner(),
+    owner=Human(),
 )
 
 
@@ -618,18 +636,21 @@ null_test_task = Task(
     owner=NullTestTaskOwner(),
 )
 
+TEST_DIR = ".data/test/agents"
+test_blueprint = Blueprint(
+    name="Test blueprint",
+    rank=0,
+    task_history=(TaskId("task1"), TaskId("task2")),
+    reasoning="Primary directive here.",
+    knowledge="Adaptations from past tasks.",
+    serialization_dir=TEST_DIR,
+    output_dir=TEST_DIR,
+)
+
 
 def test_serialize() -> None:
     """Test serialization."""
-    test_dir = ".data/test/agents"
-    blueprint = Blueprint(
-        rank=0,
-        task_history=(TaskId("task1"), TaskId("task2")),
-        reasoning="Primary directive here.",
-        knowledge="Adaptations from past tasks.",
-        serialization_dir=test_dir,
-    )
-    aranea_agent = Aranea(task=null_test_task, blueprint=blueprint)
+    aranea_agent = Aranea(task=null_test_task, blueprint=test_blueprint)
     aranea_agent.save()
     assert aranea_agent.serialization_location.exists()
 
@@ -637,15 +658,7 @@ def test_serialize() -> None:
 def test_deserialize() -> None:
     """Test deserialization."""
     # Setup: Serialize an agent to YAML for testing deserialization
-    test_dir = ".data/test/agents"
-    blueprint = Blueprint(
-        rank=0,
-        task_history=(TaskId("task1"), TaskId("task2")),
-        reasoning="Primary directive here.",
-        knowledge="Adaptations from past tasks.",
-        serialization_dir=test_dir,
-    )
-    aranea_agent = Aranea(task=null_test_task, blueprint=blueprint)
+    aranea_agent = Aranea(task=null_test_task, blueprint=test_blueprint)
     aranea_agent.save()
 
     # Test: Deserialize the agent from the YAML file
