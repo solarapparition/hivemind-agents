@@ -1,16 +1,17 @@
 """Toolkit for supporting Autogen package."""
 
 from typing import Any, Callable
-from autogen import config_list_from_json, ConversableAgent, UserProxyAgent, AssistantAgent
+from autogen import config_list_from_models, ConversableAgent, UserProxyAgent, AssistantAgent
 
 ConfigDict = dict[str, Any]
 
-DEFAULT_CONFIG_LIST: list[ConfigDict] = config_list_from_json(
-    "OAI_CONFIG_LIST",
-    filter_dict={
-        "model": ["gpt4", "gpt-4", "gpt-4-32k"],
-    },
-)
+DEFAULT_CONFIG_LIST = config_list_from_models(model_list=["gpt-4-1106-preview"])
+# DEFAULT_CONFIG_LIST: list[ConfigDict] = config_list_from_json(
+#     "OAI_CONFIG_LIST",
+#     filter_dict={
+#         "model": ["gpt4", "gpt-4", "gpt-4-32k"],
+#     },
+# )
 
 DEFAULT_LLM_CONFIG: ConfigDict = {
     "raise_on_ratelimit_or_timeout": None,
