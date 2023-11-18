@@ -4,24 +4,22 @@ from enum import Enum
 from dataclasses import dataclass, asdict, field
 from functools import cached_property
 from pathlib import Path
-from typing import NewType, NamedTuple, Sequence, Any, Self, Protocol
-import random
-import string
+from typing import NewType, NamedTuple, Sequence, Any, Self, Protocol, TypeVar
+from uuid import uuid4 as generate_uuid
 
-from hivemind.toolkit.text_formatting import generate_timestamp_id, dedent_and_strip
+from hivemind.toolkit.text_formatting import dedent_and_strip
 from hivemind.toolkit.yaml_tools import yaml
 
 BlueprintId = NewType("BlueprintId", str)
 TaskId = NewType("TaskId", str)
 RuntimeId = NewType("RuntimeId", str)
 TaskHistory = Sequence[TaskId]
+IdTypeT = TypeVar("IdTypeT", BlueprintId, TaskId)
 
 
-def generate_blueprint_id() -> BlueprintId:
+def generate_aranea_id(id_type: type[IdTypeT]) -> IdTypeT:
     """Generate an ID for an agent."""
-    timestamp = generate_timestamp_id()
-    random_str = "".join(random.choices(string.ascii_uppercase + string.digits, k=5))
-    return BlueprintId(f"aranea_{timestamp}_{random_str}")
+    return id_type(f"{str(generate_uuid())}")
 
 
 class TaskValidation(NamedTuple):
@@ -40,7 +38,7 @@ class Blueprint:
     reasoning: str
     knowledge: str
     serialization_dir: str
-    id: BlueprintId = field(default_factory=generate_blueprint_id)
+    id: BlueprintId = field(default_factory=lambda: generate_aranea_id(BlueprintId))
 
 
 class TaskOwner(Protocol):
@@ -164,11 +162,12 @@ class TaskDescription:
 class Task:
     """A task for an Aranea agent."""
 
-    id: TaskId
     name: str
     description: TaskDescription
     owner: TaskOwner
+    id: TaskId = field(default_factory=lambda: generate_aranea_id(TaskId))
     agent_id: RuntimeId | None = None
+    notes: dict[str, str] = field(default_factory=dict)
     work_status: TaskWorkStatus = TaskWorkStatus.NEW
     discussion_status: TaskDiscussionStatus = TaskDiscussionStatus.NONE
     validator: TaskValidator = field(default_factory=HumanTaskValidator)
@@ -412,17 +411,12 @@ class Aranea:
         blueprint_data["task_history"] = tuple(blueprint_data["task_history"])
         return cls(blueprint=Blueprint(**blueprint_data), task=task)
 
-    def __hash__(self) -> int:
-        """Hash the agent."""
-        return hash(self.blueprint)
-
     def ask_question(self, question: str) -> str:
         """Ask a question regarding the task to the owner of the task."""
         return self.task.owner.answer_question(question)
 
 
 # ....
-# {subtask_statuses} > cancelled subtasks need cancellation reason
 
 """structure
 {event_log}
@@ -433,16 +427,7 @@ class Aranea:
 {action_choice}
 "extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
 "discuss_with_agent",
-    # these are all options for individual discussion messages
-    "informational",
-    "start_subtask",
-    "pause_subtask",
-    "cancel_subtask",
-    "resume_subtask",
 "discuss_with_task_owner", # doesn't send actual message yet, just brings up the context for sending message
-    "task_completed",
-    "task_blocked",
-    "query",
 "wait",
 # > event log for task also includes agent decisions and thoughts
 """
@@ -588,7 +573,7 @@ Ensure alignment with overall task objectives.
 # Testing: will need to be converted to Pytest eventually
 
 
-class TestTaskOwner:
+class NullTestTaskOwner:
     """Test task owner."""
 
     def answer_question(self, question: str) -> str:
@@ -596,10 +581,12 @@ class TestTaskOwner:
         return f"Answer to '{question}'"
 
 
-test_task = Task(
-    id=TaskId("task3"),
-    description="A task for an Aranea agent.",
-    owner=TestTaskOwner(),
+null_test_task = Task(
+    name="Some task",
+    description=TaskDescription(
+        information="Some information.", definition_of_done="Some definition of done."
+    ),
+    owner=NullTestTaskOwner(),
 )
 
 
@@ -607,14 +594,13 @@ def test_serialize() -> None:
     """Test serialization."""
     test_dir = ".data/test/agents"
     blueprint = Blueprint(
-        id=generate_blueprint_id(),
         rank=0,
         task_history=(TaskId("task1"), TaskId("task2")),
         reasoning="Primary directive here.",
         knowledge="Adaptations from past tasks.",
         serialization_dir=test_dir,
     )
-    aranea_agent = Aranea(task=test_task, blueprint=blueprint)
+    aranea_agent = Aranea(task=null_test_task, blueprint=blueprint)
     aranea_agent.save()
     assert aranea_agent.serialization_location.exists()
 
@@ -624,14 +610,13 @@ def test_deserialize() -> None:
     # Setup: Serialize an agent to YAML for testing deserialization
     test_dir = ".data/test/agents"
     blueprint = Blueprint(
-        id=generate_blueprint_id(),
         rank=0,
         task_history=(TaskId("task1"), TaskId("task2")),
         reasoning="Primary directive here.",
         knowledge="Adaptations from past tasks.",
         serialization_dir=test_dir,
     )
-    aranea_agent = Aranea(task=test_task, blueprint=blueprint)
+    aranea_agent = Aranea(task=null_test_task, blueprint=blueprint)
     aranea_agent.save()
 
     # Test: Deserialize the agent from the YAML file
@@ -648,14 +633,20 @@ def test_deserialize() -> None:
     assert deserialized_agent.task == aranea_agent.task
 
 
-def test_ask_question() -> None:
-    """Ask a question to the task owner."""
+def test_id_generation() -> None:
+    """Test that ids are generated as UUIDs."""
+    blueprint_id = generate_aranea_id(BlueprintId)
+    task_id = generate_aranea_id(TaskId)
+    assert (
+        len(blueprint_id) == 36 == len(str(task_id))
+    ), f"{len(blueprint_id)} {len(task_id)}"
 
 
 def test() -> None:
     """Run tests."""
-    # test_serialize()
-    # test_deserialize()
+    test_serialize()
+    test_deserialize()
+    test_id_generation()
 
 
 if __name__ == "__main__":
