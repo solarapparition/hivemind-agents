@@ -10,6 +10,7 @@ from uuid import uuid4 as generate_uuid
 
 from hivemind.toolkit.text_formatting import dedent_and_strip
 from hivemind.toolkit.yaml_tools import yaml
+from hivemind.toolkit.types import HivemindAgent
 
 BlueprintId = NewType("BlueprintId", str)
 TaskId = NewType("TaskId", str)
@@ -95,15 +96,19 @@ class Event:
 class TaskValidator(Protocol):
     """A validator of a task."""
 
-    def __call__(self, task: "Task") -> TaskValidation:
+    def validate(self, task: "Task") -> TaskValidation:
         """Validate the work done by the agent for a task."""
         raise NotImplementedError
 
 
-class HumanTaskValidator:
-    """A human validator of a task."""
+class HumanTaskOwner:
+    """A human task owner. Serves as both the owner and validator of a task."""
 
-    def __call__(self, task: "Task") -> TaskValidation:
+    def answer_question(self, question: str) -> str:
+        """Answer a question regarding the task."""
+        return input(f"Answer to '{question}': ")
+
+    def validate(self, task: "Task") -> TaskValidation:
         """Validate the work done by the agent."""
         print(f'Please validate the following task:\n"{str(task)}"')
         while True:
@@ -120,13 +125,6 @@ class HumanTaskValidator:
         feedback: str = input("Provide feedback: ")
         return TaskValidation(validation_result, feedback)
 
-
-class HumanTaskOwner:
-    """Human task owner."""
-
-    def answer_question(self, question: str) -> str:
-        """Answer a question regarding the task."""
-        return input(f"Answer to '{question}': ")
 
 
 @dataclass
@@ -194,7 +192,7 @@ class Task:
     notes: dict[str, str] = field(default_factory=dict)
     work_status: TaskWorkStatus = TaskWorkStatus.NEW
     discussion_status: TaskDiscussionStatus = TaskDiscussionStatus.NONE
-    validator: TaskValidator = field(default_factory=HumanTaskValidator)
+    validator: TaskValidator = field(default_factory=HumanTaskOwner)
 
     @cached_property
     def event_log(self) -> EventLog:
@@ -208,7 +206,7 @@ class Task:
 
     def validate(self) -> TaskValidation:
         """Validate the work done by the agent."""
-        return self.validator(self)
+        return self.validator.validate(self)
 
     @property
     def main_status_printout(self) -> str:
@@ -440,11 +438,18 @@ class Aranea:
         return self.task.owner.answer_question(question)
 
 
+example_test_task = Task(
+    name="Reorganize files on a flash drive",
+    description=TaskDescription(
+        information="The files on the flash drive are currently unorganized.",
+        definition_of_done="The files on the flash drive are organized.",
+    ),
+    owner=HumanTaskOwner(),
+)
+
+
 # ....
 
-"""structure
-{event_log}
-"""
 
 """action choice
 {action_choice_reasoning} # attribute > reasoning step: think through what knowledge is relevant
@@ -611,15 +616,6 @@ null_test_task = Task(
         information="Some information.", definition_of_done="Some definition of done."
     ),
     owner=NullTestTaskOwner(),
-)
-
-example_test_task = Task(
-    name="Reorganize files on a flash drive",
-    description=TaskDescription(
-        information="The files on the flash drive are currently unorganized.",
-        definition_of_done="The files on the flash drive are organized.",
-    ),
-    owner=HumanTaskOwner(),
 )
 
 
