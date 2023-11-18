@@ -21,6 +21,7 @@ from hivemind.config import (
     BROWSERPILOT_DATA_DIR,
     CHROMEDRIVER_LOCATION,
 )
+from hivemind.toolkit.types import HivemindAgent
 from hivemind.toolkit.text_formatting import dedent_and_strip
 from hivemind.toolkit.autogen_support import get_last_user_reply
 from hivemind.toolkit.browserpilot_support import run_browserpilot_with_instructions
@@ -37,23 +38,6 @@ from hivemind.toolkit.autogen_support import (
 langchain.llm_cache = SQLiteCache(
     database_path=str(LANGCHAIN_CACHE_DIR / ".langchain.db")
 )
-
-class HivemindAgent(Protocol):
-    """Interface for Hivemind agents."""
-
-    @property
-    def name(self) -> str:
-        """Name of the agent."""
-        ...
-
-    @property
-    def work_dir(self) -> Path:
-        """Working directory for the agent's files."""
-        ...
-
-    def run(self, message: str) -> tuple[str, Callable[[str], str]]:
-        """Run the agent with a message, and a way to continue the conversation. Rerunning this method starts a new conversation."""
-        ...
 
 
 def make_hivemind_user_proxy(
