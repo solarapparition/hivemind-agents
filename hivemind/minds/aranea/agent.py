@@ -51,7 +51,7 @@ class TaskOwner(Protocol):
         raise NotImplementedError
 
 
-class TaskStatus(Enum):
+class TaskWorkStatus(Enum):
     """Status of a task."""
 
     NEW = "new"
@@ -62,7 +62,7 @@ class TaskStatus(Enum):
     IN_VALIDATION = "in validation"
 
 
-class DiscussionStatus(Enum):
+class TaskDiscussionStatus(Enum):
     """Status of a discussion."""
 
     NONE = "none"
@@ -116,9 +116,11 @@ class TaskList:
         """String representation of the task list."""
         return "\n\n".join([str(task) for task in self.tasks])
 
-    def filter_by_status(self, status: TaskStatus) -> Self:
+    def filter_by_status(self, status: TaskWorkStatus) -> Self:
         """Filter the task list by status."""
-        return TaskList(tasks=[task for task in self.tasks if task.status == status])
+        return TaskList(
+            tasks=[task for task in self.tasks if task.work_status == status]
+        )
 
 
 @dataclass
@@ -138,16 +140,37 @@ class EventLog:
 
 
 @dataclass
+class TaskDescription:
+    """Description of a task."""
+
+    information: str
+    definition_of_done: str
+
+    def __str__(self) -> str:
+        """String representation of the task description."""
+        template = """
+        Information:
+        {information}
+
+        Definition of Done:
+        {definition_of_done}
+        """
+        return dedent_and_strip(template).format(
+            information=self.information, definition_of_done=self.definition_of_done
+        )
+
+
+@dataclass
 class Task:
     """A task for an Aranea agent."""
 
     id: TaskId
     name: str
-    description: str
+    description: TaskDescription
     owner: TaskOwner
-    agent: "Aranea" | None = None
-    status: TaskStatus = TaskStatus.NEW
-    discussion_status: DiscussionStatus = DiscussionStatus.NONE
+    agent_id: RuntimeId | None = None
+    work_status: TaskWorkStatus = TaskWorkStatus.NEW
+    discussion_status: TaskDiscussionStatus = TaskDiscussionStatus.NONE
     validator: TaskValidator = field(default_factory=HumanTaskValidator)
 
     @cached_property
@@ -160,23 +183,53 @@ class Task:
         """Subtasks of the task."""
         return TaskList()
 
-    # @property
-    # def status_printout(self) -> str:
-    #     """Printout of the status of the task."""
-    #     return f"{self.id}: {self.description}"
-
     def validate(self) -> TaskValidation:
         """Validate the work done by the agent."""
         return self.validator(self)
 
-    def __str__(self) -> str:
+    @property
+    def main_status_printout(self) -> str:
         """String representation of the task."""
         template = """
+        Id: {id}
+        Name: {name}
+        Owner: {owner}
+        Work Status: {status}
+        Discussion Status: {discussion_status}
 
+        Description:
+        {description}
         """
-        print("TODO: STR REPRESENTATION OF TASK")
-        breakpoint()
-        # return f"{self.id}: {self.description}"
+        return dedent_and_strip(template).format(
+            id=self.id,
+            name=self.name,
+            owner=self.owner,
+            status=self.work_status,
+            discussion_status=self.discussion_status,
+            description=self.description,
+        )
+
+    def __str__(self) -> str:
+        """String representation of task status."""
+        return self.main_status_printout
+
+    @property
+    def subtask_status_printout(self) -> str:
+        """String representation of task as a subtask."""
+        template = """
+        Id: {id}
+        Name: {name}
+        Work Status: {status}
+        Discussion Status: {discussion_status}
+        Delegated Agent Id: {agent_id}
+        """
+        return dedent_and_strip(template).format(
+            id=self.id,
+            agent_id=self.agent_id,
+            name=self.name,
+            status=self.work_status,
+            discussion_status=self.discussion_status,
+        )
 
 
 @dataclass
@@ -255,14 +308,20 @@ class CoreState:
         ```end_of_recent_events_log
         """
         template = dedent_and_strip(template)
-        completed_subtasks = str(self.subtasks.filter_by_status(TaskStatus.COMPLETED))
-        cancelled_subtasks = str(self.subtasks.filter_by_status(TaskStatus.CANCELLED))
-        in_validation_subtasks = str(
-            self.subtasks.filter_by_status(TaskStatus.IN_VALIDATION)
+        completed_subtasks = str(
+            self.subtasks.filter_by_status(TaskWorkStatus.COMPLETED)
         )
-        delegated_subtasks = str(self.subtasks.filter_by_status(TaskStatus.DELEGATED))
-        new_subtasks = str(self.subtasks.filter_by_status(TaskStatus.NEW))
-        blocked_subtasks = str(self.subtasks.filter_by_status(TaskStatus.BLOCKED))
+        cancelled_subtasks = str(
+            self.subtasks.filter_by_status(TaskWorkStatus.CANCELLED)
+        )
+        in_validation_subtasks = str(
+            self.subtasks.filter_by_status(TaskWorkStatus.IN_VALIDATION)
+        )
+        delegated_subtasks = str(
+            self.subtasks.filter_by_status(TaskWorkStatus.DELEGATED)
+        )
+        new_subtasks = str(self.subtasks.filter_by_status(TaskWorkStatus.NEW))
+        blocked_subtasks = str(self.subtasks.filter_by_status(TaskWorkStatus.BLOCKED))
         return template.format(
             knowledge=self.knowledge,
             task_specification=str(self.main_task),
@@ -282,6 +341,10 @@ class Aranea:
 
     blueprint: Blueprint
     task: Task
+
+    def __post_init__(self) -> None:
+        """Post-initialization."""
+        self.task.agent_id = self.id
 
     @property
     def blueprint_id(self) -> BlueprintId:
@@ -358,12 +421,11 @@ class Aranea:
         return self.task.owner.answer_question(question)
 
 
-# {task_specification} > task must have definition of done
 # ....
+# {subtask_statuses} > cancelled subtasks need cancellation reason
 
 """structure
-{subtask_statuses} > cancelled subtasks need cancellation reason
-{action_log}
+{event_log}
 """
 
 """action choice
