@@ -152,7 +152,8 @@ class TaskList:
 
     def __str__(self) -> str:
         """String representation of the task list."""
-        return "\n".join([str(task) for task in self.tasks])
+        # if we're printing out the whole task list, assume these are subtasks
+        return "\n".join([task.subtask_status_printout for task in self.tasks])
 
     def filter_by_status(self, status: TaskWorkStatus) -> Self:
         """Filter the task list by status."""
@@ -254,13 +255,22 @@ class Task:
     @property
     def subtask_status_printout(self) -> str:
         """String representation of task as a subtask."""
-        template = """
+        not_done_template = """
         Id: {id}
         Name: {name}
         Work Status: {status}
         Discussion Status: {discussion_status}
         Delegated Agent Id: {agent_id}
         """
+        done_template = """
+        Id: {id}
+        Name: {name}
+        """
+        template = (
+            done_template
+            if self.work_status in {TaskWorkStatus.COMPLETED, TaskWorkStatus.CANCELLED}
+            else not_done_template
+        )
         return dedent_and_strip(template).format(
             id=self.id,
             agent_id=self.agent_id,
@@ -476,9 +486,13 @@ class Orchestrator:
         return self.task.owner.answer_question(question)
 
 
-# > interfacing: hivemind agent assumes aranea agent already exists; how to reconcile?
-# action choice
 # ....
+# > create main aranea hivemind agent to receive tasks
+# > delegate subtasks to subagents: keep as test function for now
+# > execute_task() must be async
+# choose action
+# ....
+# > next action execution
 
 
 """action choice
