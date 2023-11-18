@@ -193,12 +193,12 @@ class BrowserDaemon:
                         "properties": {
                             "text_field_description": {
                                 "type": "string",
-                                "description": "A natural language description of the text field that uniquely identifies it."
+                                "description": "A natural language description of the text field that uniquely identifies it.",
                             },
                             "text": {
                                 "type": "string",
-                                "description": "The text to type into the text field."
-                            }
+                                "description": "The text to type into the text field.",
+                            },
                         },
                         "required": ["text_field_description"],
                     },
