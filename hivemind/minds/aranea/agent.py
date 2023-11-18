@@ -15,7 +15,7 @@ from hivemind.toolkit.types import HivemindAgent, HivemindReply
 BlueprintId = NewType("BlueprintId", str)
 TaskId = NewType("TaskId", str)
 RuntimeId = NewType("RuntimeId", str)
-TaskHistory = Sequence[TaskId]
+TaskHistory = list[TaskId]
 IdTypeT = TypeVar("IdTypeT", BlueprintId, TaskId)
 
 
@@ -31,11 +31,19 @@ class TaskValidation(NamedTuple):
     feedback: str
 
 
+class Role(Enum):
+    """Role of an agent."""
+
+    ORCHESTRATOR = "orchestrator"
+    BOT = "bot"
+
+
 @dataclass(frozen=True)
 class Blueprint:
     """A blueprint for an Aranea agent."""
 
     name: str
+    role: Role
     rank: int
     task_history: TaskHistory
     reasoning: str
@@ -43,6 +51,11 @@ class Blueprint:
     serialization_dir: str
     output_dir: str
     id: BlueprintId = field(default_factory=lambda: generate_aranea_id(BlueprintId))
+
+    # def __post_init__(self) -> None:
+    #     """Post-initialization."""
+    #     if not self.core_template:
+    #         self.core_template = self.role.default_core_template
 
 
 class TaskOwner(Protocol):
@@ -265,13 +278,90 @@ class CoreState:
     knowledge: str
     main_task: Task
     subtasks: TaskList
+    template: str
     events: EventLog
 
     def __str__(self) -> str:
         """String representation of the core state."""
+        completed_subtasks = str(
+            self.subtasks.filter_by_status(TaskWorkStatus.COMPLETED)
+        )
+        cancelled_subtasks = str(
+            self.subtasks.filter_by_status(TaskWorkStatus.CANCELLED)
+        )
+        in_validation_subtasks = str(
+            self.subtasks.filter_by_status(TaskWorkStatus.IN_VALIDATION)
+        )
+        delegated_subtasks = str(
+            self.subtasks.filter_by_status(TaskWorkStatus.DELEGATED)
+        )
+        new_subtasks = str(self.subtasks.filter_by_status(TaskWorkStatus.NEW))
+        blocked_subtasks = str(self.subtasks.filter_by_status(TaskWorkStatus.BLOCKED))
+        return dedent_and_strip(self.template).format(
+            knowledge=self.knowledge,
+            task_specification=str(self.main_task),
+            completed_subtasks=completed_subtasks,
+            cancelled_subtasks=cancelled_subtasks,
+            in_validation_subtasks=in_validation_subtasks,
+            delegated_subtasks=delegated_subtasks,
+            new_subtasks=new_subtasks,
+            blocked_subtasks=blocked_subtasks,
+            event_log=self.events.recent(10).to_str_with_pov(self.agent_id),
+        )
+
+
+@dataclass
+class Orchestrator:
+    """A recursively auto-specializing agent."""
+
+    blueprint: Blueprint
+    task: Task
+
+    def __post_init__(self) -> None:
+        """Post-initialization."""
+        self.task.agent_id = self.id
+
+    @property
+    def id(self) -> RuntimeId:
+        """Runtime id of the agent."""
+        return RuntimeId(f"{self.blueprint_id}_{self.task.id}")
+
+    @property
+    def blueprint_id(self) -> BlueprintId:
+        """Id of the agent."""
+        return self.blueprint.id
+
+    @property
+    def rank(self) -> int:
+        """Rank of the agent."""
+        return self.blueprint.rank
+
+    @property
+    def task_history(self) -> TaskHistory:
+        """History of tasks completed by the agent."""
+        return self.blueprint.task_history
+
+    @property
+    def reasoning(self) -> str:
+        """Instructions for the agent."""
+        return self.blueprint.reasoning
+
+    @property
+    def knowledge(self) -> str:
+        """Learnings from past tasks."""
+        return self.blueprint.knowledge
+
+    @property
+    def role(self) -> Role:
+        """Role of the agent."""
+        return self.blueprint.role
+
+    @property
+    def core_template(self) -> str:
+        """Template for the core state."""
         template = """
         ## MISSION:
-        You are an expert task manager that specializes in managing the status and delegating the execution of a specific task and its subtasks to AGENTS that can execute those tasks while communicating with the TASK OWNER to gather requirements on the task. Your goal is to complete the task as efficiently as possible.
+        You are an expert task manager that specializes in managing the status and delegating the execution of a specific task and its subtasks to AGENTS that can execute those tasks while communicating with the TASK OWNER to gather requirements on the task. Your goal is to use your agents to complete the task as efficiently as possible.
 
         ## KNOWLEDGE:
         In addition to the general background knowledge of your language model, you have the following, more specialized knowledge that may be relevant to the task at hand:
@@ -332,74 +422,7 @@ class CoreState:
         {event_log}
         ```end_of_recent_events_log
         """
-        template = dedent_and_strip(template)
-        completed_subtasks = str(
-            self.subtasks.filter_by_status(TaskWorkStatus.COMPLETED)
-        )
-        cancelled_subtasks = str(
-            self.subtasks.filter_by_status(TaskWorkStatus.CANCELLED)
-        )
-        in_validation_subtasks = str(
-            self.subtasks.filter_by_status(TaskWorkStatus.IN_VALIDATION)
-        )
-        delegated_subtasks = str(
-            self.subtasks.filter_by_status(TaskWorkStatus.DELEGATED)
-        )
-        new_subtasks = str(self.subtasks.filter_by_status(TaskWorkStatus.NEW))
-        blocked_subtasks = str(self.subtasks.filter_by_status(TaskWorkStatus.BLOCKED))
-        return template.format(
-            knowledge=self.knowledge,
-            task_specification=str(self.main_task),
-            completed_subtasks=completed_subtasks,
-            cancelled_subtasks=cancelled_subtasks,
-            in_validation_subtasks=in_validation_subtasks,
-            delegated_subtasks=delegated_subtasks,
-            new_subtasks=new_subtasks,
-            blocked_subtasks=blocked_subtasks,
-            event_log=self.events.recent(10).to_str_with_pov(self.agent_id),
-        )
-
-
-@dataclass
-class Aranea:
-    """A recursively auto-specializing agent."""
-
-    blueprint: Blueprint
-    task: Task
-
-    def __post_init__(self) -> None:
-        """Post-initialization."""
-        self.task.agent_id = self.id
-
-    @property
-    def blueprint_id(self) -> BlueprintId:
-        """Id of the agent."""
-        return self.blueprint.id
-
-    @property
-    def id(self) -> RuntimeId:
-        """Runtime id of the agent."""
-        return RuntimeId(f"{self.blueprint_id}_{self.task.id}")
-
-    @property
-    def rank(self) -> int:
-        """Rank of the agent."""
-        return self.blueprint.rank
-
-    @property
-    def task_history(self) -> TaskHistory:
-        """History of tasks completed by the agent."""
-        return self.blueprint.task_history
-
-    @property
-    def reasoning(self) -> str:
-        """Instructions for the agent."""
-        return self.blueprint.reasoning
-
-    @property
-    def knowledge(self) -> str:
-        """Learnings from past tasks."""
-        return self.blueprint.knowledge
+        return dedent_and_strip(template)
 
     @property
     def core_state(self) -> CoreState:
@@ -409,6 +432,7 @@ class Aranea:
             knowledge=self.knowledge,
             main_task=self.task,
             subtasks=self.task.subtasks,
+            template=self.core_template,
             events=self.task.event_log,
         )
 
@@ -451,21 +475,9 @@ class Aranea:
         """Ask a question regarding the task to the owner of the task."""
         return self.task.owner.answer_question(question)
 
-    def run(self, message: str) -> HivemindReply:
-        """Run the agent."""
-        breakpoint()
 
-
-example_test_task = Task(
-    name="Reorganize files on a flash drive",
-    description=TaskDescription(
-        information="The files on the flash drive are currently unorganized.",
-        definition_of_done="The files on the flash drive are organized.",
-    ),
-    owner=Human(),
-)
-
-
+# > interfacing: hivemind agent assumes aranea agent already exists; how to reconcile?
+# action choice
 # ....
 
 
@@ -636,6 +648,15 @@ null_test_task = Task(
     owner=NullTestTaskOwner(),
 )
 
+example_test_task = Task(
+    name="Reorganize files on a flash drive",
+    description=TaskDescription(
+        information="The files on the flash drive are currently unorganized.",
+        definition_of_done="N/A",
+    ),
+    owner=Human(),
+)
+
 TEST_DIR = ".data/test/agents"
 test_blueprint = Blueprint(
     name="Test blueprint",
@@ -650,7 +671,7 @@ test_blueprint = Blueprint(
 
 def test_serialize() -> None:
     """Test serialization."""
-    aranea_agent = Aranea(task=null_test_task, blueprint=test_blueprint)
+    aranea_agent = Orchestrator(task=null_test_task, blueprint=test_blueprint)
     aranea_agent.save()
     assert aranea_agent.serialization_location.exists()
 
@@ -658,11 +679,11 @@ def test_serialize() -> None:
 def test_deserialize() -> None:
     """Test deserialization."""
     # Setup: Serialize an agent to YAML for testing deserialization
-    aranea_agent = Aranea(task=null_test_task, blueprint=test_blueprint)
+    aranea_agent = Orchestrator(task=null_test_task, blueprint=test_blueprint)
     aranea_agent.save()
 
     # Test: Deserialize the agent from the YAML file
-    deserialized_agent: Aranea = Aranea.load(
+    deserialized_agent: Orchestrator = Orchestrator.load(
         aranea_agent.serialization_location, aranea_agent.task
     )
 
