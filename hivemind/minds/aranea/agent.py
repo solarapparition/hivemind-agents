@@ -1,5 +1,6 @@
 """Structure for Aranea agents."""
 
+import re
 from enum import Enum
 from dataclasses import dataclass, asdict, field
 from functools import cached_property
@@ -68,11 +69,27 @@ class TaskDiscussionStatus(Enum):
     AWAITING_RESPONSE_FROM_YOU = "awaiting response from you"
 
 
+def replace_agent_id(
+    text_to_replace: str, replace_with: str, agent_id: RuntimeId
+) -> str:
+    """Replace agent id with 'You'."""
+    pattern = f"agent {agent_id}|Agent {agent_id}"
+    return re.sub(pattern, replace_with, text_to_replace)
+
+
 @dataclass
 class Event:
     """An event in the event log."""
 
-    ...
+    timestamp: str
+    description: str
+
+    def __str__(self) -> str:
+        return f"[{self.timestamp}] {self.description}"
+
+    def to_str_with_pov(self, pov_id: RuntimeId) -> str:
+        """String representation of the event with a point of view from a certain agent."""
+        return replace_agent_id(str(self), "You", pov_id)
 
 
 class TaskValidator(Protocol):
@@ -104,6 +121,14 @@ class HumanTaskValidator:
         return TaskValidation(validation_result, feedback)
 
 
+class HumanTaskOwner:
+    """Human task owner."""
+
+    def answer_question(self, question: str) -> str:
+        """Answer a question regarding the task."""
+        return input(f"Answer to '{question}': ")
+
+
 @dataclass
 class TaskList:
     """A list of tasks and their managment functionality."""
@@ -112,7 +137,7 @@ class TaskList:
 
     def __str__(self) -> str:
         """String representation of the task list."""
-        return "\n\n".join([str(task) for task in self.tasks])
+        return "\n".join([str(task) for task in self.tasks])
 
     def filter_by_status(self, status: TaskWorkStatus) -> Self:
         """Filter the task list by status."""
@@ -129,8 +154,7 @@ class EventLog:
 
     def to_str_with_pov(self, pov_id: RuntimeId) -> str:
         """String representation of the event log with a point of view from a certain agent."""
-        print("TODO: EVENT LOG WITH POV")
-        breakpoint()
+        return "\n".join([event.to_str_with_pov(pov_id) for event in self.events])
 
     def recent(self, num_recent: int) -> Self:
         """Recent events."""
@@ -587,6 +611,15 @@ null_test_task = Task(
         information="Some information.", definition_of_done="Some definition of done."
     ),
     owner=NullTestTaskOwner(),
+)
+
+example_test_task = Task(
+    name="Reorganize files on a flash drive",
+    description=TaskDescription(
+        information="The files on the flash drive are currently unorganized.",
+        definition_of_done="The files on the flash drive are organized.",
+    ),
+    owner=HumanTaskOwner(),
 )
 
 
