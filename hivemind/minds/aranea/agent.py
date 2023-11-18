@@ -8,19 +8,20 @@ from typing import NewType, NamedTuple, Sequence, Any, Self, Protocol
 import random
 import string
 
-from hivemind.toolkit.text_formatting import generate_timestamp_id
+from hivemind.toolkit.text_formatting import generate_timestamp_id, dedent_and_strip
 from hivemind.toolkit.yaml_tools import yaml
 
-AraneaId = NewType("AraneaId", str)
+BlueprintId = NewType("BlueprintId", str)
 TaskId = NewType("TaskId", str)
+RuntimeId = NewType("RuntimeId", str)
 TaskHistory = Sequence[TaskId]
 
 
-def generate_aranea_id() -> AraneaId:
+def generate_blueprint_id() -> BlueprintId:
     """Generate an ID for an agent."""
     timestamp = generate_timestamp_id()
     random_str = "".join(random.choices(string.ascii_uppercase + string.digits, k=5))
-    return AraneaId(f"aranea_{timestamp}_{random_str}")
+    return BlueprintId(f"aranea_{timestamp}_{random_str}")
 
 
 class TaskValidation(NamedTuple):
@@ -39,7 +40,7 @@ class Blueprint:
     reasoning: str
     knowledge: str
     serialization_dir: str
-    id: AraneaId = field(default_factory=generate_aranea_id)
+    id: BlueprintId = field(default_factory=generate_blueprint_id)
 
 
 class TaskOwner(Protocol):
@@ -54,14 +55,22 @@ class TaskStatus(Enum):
     """Status of a task."""
 
     NEW = "new"
-    IN_PROGRESS = "in progress"
+    DELEGATED = "delegated"
     COMPLETED = "completed"
-    PAUSED = "paused"
     CANCELLED = "cancelled"
     BLOCKED = "blocked"
     IN_VALIDATION = "in validation"
 
 
+class DiscussionStatus(Enum):
+    """Status of a discussion."""
+
+    NONE = "none"
+    AWAITING_RESPONSE_FROM_AGENT = "awaiting response from agent"
+    AWAITING_RESPONSE_FROM_YOU = "awaiting response from you"
+
+
+@dataclass
 class Event:
     """An event in the event log."""
 
@@ -98,24 +107,63 @@ class HumanTaskValidator:
 
 
 @dataclass
+class TaskList:
+    """A list of tasks and their managment functionality."""
+
+    tasks: list["Task"] = field(default_factory=list)
+
+    def __str__(self) -> str:
+        """String representation of the task list."""
+        return "\n\n".join([str(task) for task in self.tasks])
+
+    def filter_by_status(self, status: TaskStatus) -> Self:
+        """Filter the task list by status."""
+        return TaskList(tasks=[task for task in self.tasks if task.status == status])
+
+
+@dataclass
+class EventLog:
+    """A log of events within a task."""
+
+    events: list[Event] = field(default_factory=list)
+
+    def to_str_with_pov(self, pov_id: RuntimeId) -> str:
+        """String representation of the event log with a point of view from a certain agent."""
+        print("TODO: EVENT LOG WITH POV")
+        breakpoint()
+
+    def recent(self, num_recent: int) -> Self:
+        """Recent events."""
+        return EventLog(events=self.events[-num_recent:])
+
+
+@dataclass
 class Task:
     """A task for an Aranea agent."""
 
     id: TaskId
+    name: str
     description: str
     owner: TaskOwner
+    agent: "Aranea" | None = None
     status: TaskStatus = TaskStatus.NEW
-    subagent_id: AraneaId | None = None
-    status_details: list[str] = field(default_factory=list)
-    in_discussion: bool = False
-    event_log: list[Event] = field(default_factory=list)
-    subtasks: list[Self] = field(default_factory=list)
+    discussion_status: DiscussionStatus = DiscussionStatus.NONE
     validator: TaskValidator = field(default_factory=HumanTaskValidator)
 
-    @property
-    def status_printout(self) -> str:
-        """Printout of the status of the task."""
-        return f"{self.id}: {self.description}"
+    @cached_property
+    def event_log(self) -> EventLog:
+        """Event log for the task."""
+        return EventLog()
+
+    @cached_property
+    def subtasks(self) -> TaskList:
+        """Subtasks of the task."""
+        return TaskList()
+
+    # @property
+    # def status_printout(self) -> str:
+    #     """Printout of the status of the task."""
+    #     return f"{self.id}: {self.description}"
 
     def validate(self) -> TaskValidation:
         """Validate the work done by the agent."""
@@ -123,6 +171,9 @@ class Task:
 
     def __str__(self) -> str:
         """String representation of the task."""
+        template = """
+
+        """
         print("TODO: STR REPRESENTATION OF TASK")
         breakpoint()
         # return f"{self.id}: {self.description}"
@@ -132,10 +183,97 @@ class Task:
 class CoreState:
     """Core runtime state of an agent."""
 
+    agent_id: RuntimeId
     knowledge: str
-    task_specification: str
-    subtask_statuses: list[str]
-    task_event_log: list[Event]
+    main_task: Task
+    subtasks: TaskList
+    events: EventLog
+
+    def __str__(self) -> str:
+        """String representation of the core state."""
+        template = """
+        ## MISSION:
+        You are an expert task manager that specializes in managing the status and delegating the execution of a specific task and its subtasks to AGENTS that can execute those tasks while communicating with the TASK OWNER to gather requirements on the task. Your goal is to complete the task as efficiently as possible.
+
+        ## KNOWLEDGE:
+        In addition to the general background knowledge of your language model, you have the following, more specialized knowledge that may be relevant to the task at hand:
+        ```start_of_knowledge
+        {knowledge}
+        ```end_of_knowledge
+
+        ## MAIN TASK DESCRIPTION:
+        Here is information about the main task you are currently working on:
+        ```start_of_main_task_description
+        {task_specification}
+        ```end_of_main_task_description
+
+        ## SUBTASK STATUSES:
+        Subtasks are tasks that must be completed in order to complete the main task; you do not perform subtasks yourself, but instead delegate them to other agents. This list is NOT exhaustive; you may discover additional subtasks.
+
+        Typically, tasks that are COMPLETED, CANCELLED, DELEGATED, or IN_VALIDATION do not need attention unless you discover information that changes the status of the subtask. In contrast, tasks that are NEW or BLOCKED will need action from you to start/continue execution.
+
+        ### SUBTASKS (COMPLETED):
+        These tasks have been validated as complete by agents; use this section as a reference for progress in the main task.
+        ```start_of_completed_subtasks
+        {completed_subtasks}
+        ```end_of_completed_subtasks
+
+        ### SUBTASKS (CANCELLED):
+        You have previously cancelled these subtasks for various reason and they will not be done.
+        ```start_of_cancelled_subtasks
+        {cancelled_subtasks}
+        ```end_of_cancelled_subtasks
+
+        ### SUBTASKS (IN VALIDATION):
+        These subtasks have been reported as completed by agents, but are still being validated by validators.
+        ```start_of_in_validation_subtasks
+        {in_validation_subtasks}
+        ```end_of_in_validation_subtasks
+
+        ### SUBTASKS (DELEGATED):
+        These are subtasks that you have delegated to other agents and that are currently being executed by them.
+        ```start_of_delegated_subtasks
+        {delegated_subtasks}
+        ```end_of_delegated_subtasks
+
+        ### SUBTASKS (NEW):
+        These subtasks are newly identified and not yet delegated to any agent:
+        ```start_of_new_subtasks
+        {new_subtasks}
+        ```end_of_new_subtasks
+
+        ### SUBTASKS (BLOCKED):
+        These subtasks are blocked by some issue, and execution cannot continue until the issue is resolved, typically by discussing the blocker and/or creating a new subtask to resolve the blocker.
+        ```start_of_blocked_subtasks
+        {blocked_subtasks}
+        ```end_of_blocked_subtasks
+
+        ## RECENT EVENTS LOG:
+        This is a log of recent events that have occurred during the execution of the task. This is NOT a complete log—use the task description and subtask statuses to get a complete picture of the current state of the work:
+        ```start_of_recent_events_log
+        {event_log}
+        ```end_of_recent_events_log
+        """
+        template = dedent_and_strip(template)
+        completed_subtasks = str(self.subtasks.filter_by_status(TaskStatus.COMPLETED))
+        cancelled_subtasks = str(self.subtasks.filter_by_status(TaskStatus.CANCELLED))
+        in_validation_subtasks = str(
+            self.subtasks.filter_by_status(TaskStatus.IN_VALIDATION)
+        )
+        delegated_subtasks = str(self.subtasks.filter_by_status(TaskStatus.DELEGATED))
+        new_subtasks = str(self.subtasks.filter_by_status(TaskStatus.NEW))
+        blocked_subtasks = str(self.subtasks.filter_by_status(TaskStatus.BLOCKED))
+        return template.format(
+            knowledge=self.knowledge,
+            task_specification=str(self.main_task),
+            completed_subtasks=completed_subtasks,
+            cancelled_subtasks=cancelled_subtasks,
+            in_validation_subtasks=in_validation_subtasks,
+            delegated_subtasks=delegated_subtasks,
+            new_subtasks=new_subtasks,
+            blocked_subtasks=blocked_subtasks,
+            event_log=self.events.recent(10).to_str_with_pov(self.agent_id),
+        )
 
 
 @dataclass
@@ -146,9 +284,14 @@ class Aranea:
     task: Task
 
     @property
-    def id(self) -> AraneaId:
+    def blueprint_id(self) -> BlueprintId:
         """Id of the agent."""
         return self.blueprint.id
+
+    @property
+    def id(self) -> RuntimeId:
+        """Runtime id of the agent."""
+        return RuntimeId(f"{self.blueprint_id}_{self.task.id}")
 
     @property
     def rank(self) -> int:
@@ -171,6 +314,17 @@ class Aranea:
         return self.blueprint.knowledge
 
     @property
+    def core_state(self) -> CoreState:
+        """Overall state of the agent."""
+        return CoreState(
+            agent_id=self.id,
+            knowledge=self.knowledge,
+            main_task=self.task,
+            subtasks=self.task.subtasks,
+            events=self.task.event_log,
+        )
+
+    @property
     def serialization_dir(self) -> Path:
         """Directory where the agent is serialized."""
         return Path(self.blueprint.serialization_dir)
@@ -178,7 +332,7 @@ class Aranea:
     @property
     def serialization_location(self) -> Path:
         """Return the location where the agent should be serialized."""
-        return self.serialization_dir / f"{self.id}.yml"
+        return self.serialization_dir / f"{self.blueprint.id}.yml"
 
     def serialize(self) -> dict[str, Any]:
         """Serialize the agent to a dict."""
@@ -203,21 +357,57 @@ class Aranea:
         """Ask a question regarding the task to the owner of the task."""
         return self.task.owner.answer_question(question)
 
-    @property
-    def subtask_statuses(self) -> list[str]:
-        """Statuses of subtasks."""
-        return [subtask.status_printout for subtask in self.task.subtasks]
 
-    @property
-    def core_state(self) -> CoreState:
-        """Overall state of the agent."""
-        return CoreState(
-            knowledge=self.knowledge,
-            task_specification=self.task.description,
-            subtask_statuses=self.subtask_statuses,
-            task_event_log=self.task.event_log,
-        )
+# {task_specification} > task must have definition of done
+# ....
 
+"""structure
+{subtask_statuses} > cancelled subtasks need cancellation reason
+{action_log}
+"""
+
+"""action choice
+{action_choice_reasoning} # attribute > reasoning step: think through what knowledge is relevant
+{action_choice}
+"extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
+"discuss_with_agent",
+    # these are all options for individual discussion messages
+    "informational",
+    "start_subtask",
+    "pause_subtask",
+    "cancel_subtask",
+    "resume_subtask",
+"discuss_with_task_owner", # doesn't send actual message yet, just brings up the context for sending message
+    "task_completed",
+    "task_blocked",
+    "query",
+"wait",
+# > event log for task also includes agent decisions and thoughts
+"""
+
+"""action execution
+{action_context}
+{action_execution_reasoning}
+{action_execution}
+"extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
+> agent_search_strategy
+"discuss_with_agent",
+    # these are all options for individual discussion messages
+    "informational",
+    "start_subtask",
+    "pause_subtask",
+    "cancel_subtask",
+    "resume_subtask",
+"discuss_with_task_owner", # doesn't send actual message yet, just brings up the context for sending message
+    "task_completed",
+    "task_blocked",
+    "query",
+"wait",
+# > every action has an output
+"""
+
+
+##########
 
 """
 {knowledge} # attribute
@@ -233,35 +423,6 @@ class Aranea:
 {reasoning}
 {action_context}
 {action_execution}
-"""
-
-
-"""
-subtask_format = {
-    "id": "subtask_1",
-    "status": "new", # "new", "in progress", "completed", "paused", "cancelled", "blocked", "in validation", "in discussion"
-    "discussion_status": "discussion in progress", # "no discussion in progress"
-    "event_log": [], # not displayed to agent
-    "description": "",
-    "blockers": [],
-    "subagent_id": "subagent_1",
-}
-"""
-
-"""actions:
-"new_subtask",
-"discuss_with_subagent",
-    # these are all options for individual discussion messages
-    "informational",
-    "start_subtask",
-    "pause_subtask",
-    "cancel_subtask",
-    "resume_subtask",
-"discuss_with_task_owner", # doesn't send actual message yet, just brings up the context for sending message
-    "task_completed",
-    "task_blocked",
-    "query",
-"wait",
 """
 
 
@@ -384,7 +545,7 @@ def test_serialize() -> None:
     """Test serialization."""
     test_dir = ".data/test/agents"
     blueprint = Blueprint(
-        id=generate_aranea_id(),
+        id=generate_blueprint_id(),
         rank=0,
         task_history=(TaskId("task1"), TaskId("task2")),
         reasoning="Primary directive here.",
@@ -401,7 +562,7 @@ def test_deserialize() -> None:
     # Setup: Serialize an agent to YAML for testing deserialization
     test_dir = ".data/test/agents"
     blueprint = Blueprint(
-        id=generate_aranea_id(),
+        id=generate_blueprint_id(),
         rank=0,
         task_history=(TaskId("task1"), TaskId("task2")),
         reasoning="Primary directive here.",
@@ -417,7 +578,7 @@ def test_deserialize() -> None:
     )
 
     # Verify: Deserialized agent matches the original
-    assert deserialized_agent.id == aranea_agent.id
+    assert deserialized_agent.blueprint.id == aranea_agent.blueprint.id
     assert deserialized_agent.rank == aranea_agent.rank
     assert deserialized_agent.task_history == aranea_agent.task_history
     assert deserialized_agent.reasoning == aranea_agent.reasoning
