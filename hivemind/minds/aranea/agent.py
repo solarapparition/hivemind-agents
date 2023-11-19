@@ -353,8 +353,7 @@ class Orchestrator:
 
     blueprint: Blueprint
     task: Task
-    output_dir: Path
-    serialization_dir: Path
+    files_parent_dir: Path
 
     @property
     def id(self) -> RuntimeId:
@@ -472,14 +471,34 @@ class Orchestrator:
         )
 
     @property
+    def files_dir(self) -> Path:
+        """Directory for files related to the agent."""
+        return self.files_parent_dir / self.id
+
+    @property
     def serialization_location(self) -> Path:
         """Return the location where the agent should be serialized."""
-        return self.serialization_dir / f"{self.blueprint.id}.yml"
+        return self.files_dir / "blueprint.yml"
+
+    @property
+    def output_dir(self) -> Path:
+        """Output directory of the agent."""
+        return self.files_dir / "output"
+
+    @property
+    def workspace_dir(self) -> Path:
+        """Workspace directory of the agent."""
+        return self.files_dir / "workspace"
 
     @property
     def name(self) -> str:
         """Name of the agent."""
         return self.blueprint.name
+
+    def make_files_dirs(self) -> None:
+        """Make the files directory for the agent."""
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.workspace_dir.mkdir(parents=True, exist_ok=True)
 
     def serialize(self) -> dict[str, Any]:
         """Serialize the agent to a dict."""
@@ -494,8 +513,7 @@ class Orchestrator:
         cls,
         blueprint_location: Path,
         task: Task,
-        output_dir: Path,
-        serialization_dir: Path,
+        files_parent_dir: Path,
     ) -> Self:
         """Deserialize an Aranea agent from a YAML file."""
         blueprint_data = yaml.load(blueprint_location)
@@ -503,8 +521,7 @@ class Orchestrator:
         return cls(
             blueprint=Blueprint(**blueprint_data),
             task=task,
-            output_dir=output_dir,
-            serialization_dir=serialization_dir,
+            files_parent_dir=files_parent_dir,
         )
 
 
@@ -561,7 +578,6 @@ class Aranea:
 
 
 # ....
-# merge blueprint dir and working dir
 # delegate subtasks to subagents: keep as test function for now
 # choose action
 # ....
