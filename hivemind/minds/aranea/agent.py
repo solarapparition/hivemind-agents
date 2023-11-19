@@ -58,7 +58,6 @@ class Blueprint:
     task_history: TaskHistory
     reasoning: str
     knowledge: str
-    serialization_dir: str
     id: BlueprintId = field(default_factory=lambda: generate_aranea_id(BlueprintId))
 
     # def __post_init__(self) -> None:
@@ -355,6 +354,7 @@ class Orchestrator:
     blueprint: Blueprint
     task: Task
     output_dir: Path
+    serialization_dir: Path
 
     @property
     def id(self) -> RuntimeId:
@@ -472,11 +472,6 @@ class Orchestrator:
         )
 
     @property
-    def serialization_dir(self) -> Path:
-        """Directory where the agent is serialized."""
-        return Path(self.blueprint.serialization_dir)
-
-    @property
     def serialization_location(self) -> Path:
         """Return the location where the agent should be serialized."""
         return self.serialization_dir / f"{self.blueprint.id}.yml"
@@ -495,12 +490,21 @@ class Orchestrator:
         yaml.dump(asdict(self.blueprint), self.serialization_location)
 
     @classmethod
-    def load(cls, blueprint_location: Path, task: Task, output_dir: Path) -> Self:
+    def load(
+        cls,
+        blueprint_location: Path,
+        task: Task,
+        output_dir: Path,
+        serialization_dir: Path,
+    ) -> Self:
         """Deserialize an Aranea agent from a YAML file."""
         blueprint_data = yaml.load(blueprint_location)
         blueprint_data["task_history"] = tuple(blueprint_data["task_history"])
         return cls(
-            blueprint=Blueprint(**blueprint_data), task=task, output_dir=output_dir
+            blueprint=Blueprint(**blueprint_data),
+            task=task,
+            output_dir=output_dir,
+            serialization_dir=serialization_dir,
         )
 
 
@@ -528,7 +532,7 @@ class Aranea:
     output_dir: Path
     blueprint_dir: Path
 
-    @property
+    @cached_property
     def id(self) -> RuntimeId:
         """Runtime id of the agent."""
         return RuntimeId(str(generate_uuid()))
@@ -557,11 +561,8 @@ class Aranea:
 
 
 # ....
-# > test task reception
-# > no need to print out agent ids for tasks
-# > serialization dir to runtime
-# > merge blueprint dir and working dir
-# > delegate subtasks to subagents: keep as test function for now
+# merge blueprint dir and working dir
+# delegate subtasks to subagents: keep as test function for now
 # choose action
 # ....
 # > next action execution > placeholder for `wait` action > every action has an output > event log for task also includes agent decisions and thoughts
@@ -570,6 +571,7 @@ class Aranea:
 {action_choice_reasoning} # attribute > reasoning step: think through what knowledge is relevant
 {action_choice}
 "extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
+# > when extracting subtasks, always provide a name
 "discuss", # doesn't send actual message yet, just brings up the context for sending message
 """
 
@@ -746,7 +748,6 @@ test_blueprint = Blueprint(
     task_history=(TaskId("task1"), TaskId("task2")),
     reasoning="Primary directive here.",
     knowledge="Adaptations from past tasks.",
-    serialization_dir=TEST_DIR,
     output_dir=TEST_DIR,
 )
 
