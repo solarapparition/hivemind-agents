@@ -5,7 +5,17 @@ from enum import Enum
 from dataclasses import dataclass, asdict, field
 from functools import cached_property
 from pathlib import Path
-from typing import NewType, NamedTuple, Sequence, Any, Self, Protocol, TypeVar, Callable
+from typing import (
+    NewType,
+    NamedTuple,
+    Sequence,
+    Any,
+    Self,
+    Protocol,
+    TypeVar,
+    Callable,
+    Coroutine,
+)
 from uuid import uuid4 as generate_uuid
 
 from hivemind.toolkit.text_formatting import dedent_and_strip
@@ -49,7 +59,6 @@ class Blueprint:
     reasoning: str
     knowledge: str
     serialization_dir: str
-    output_dir: str
     id: BlueprintId = field(default_factory=lambda: generate_aranea_id(BlueprintId))
 
     # def __post_init__(self) -> None:
@@ -61,8 +70,8 @@ class Blueprint:
 class TaskOwner(Protocol):
     """The owner of a task that you can ask questions to."""
 
-    def answer_question(self, question: str) -> str:
-        """Answer a question regarding the task."""
+    def receive_executor_message(self, message: str) -> str:
+        """Receive a message regarding the task."""
         raise NotImplementedError
 
 
@@ -182,7 +191,7 @@ class TaskDescription:
     """Description of a task."""
 
     information: str
-    definition_of_done: str
+    definition_of_done: str = ""
 
     def __str__(self) -> str:
         """String representation of the task description."""
@@ -198,19 +207,36 @@ class TaskDescription:
         )
 
 
+class Executor(Protocol):
+    """An agent responsible for executing a task."""
+
+    @property
+    def id(self) -> RuntimeId:
+        """Runtime id of the executor."""
+        raise NotImplementedError
+
+    def receive(self, message: str) -> None:
+        """Receive a message from another agent."""
+        raise NotImplementedError
+
+    async def execute(self, message: str | None = None) -> str:
+        """Execute the subtask."""
+        raise NotImplementedError
+
+
 @dataclass
 class Task:
-    """A task for an Aranea agent."""
+    """Holds information about a task."""
 
-    name: str
     description: TaskDescription
-    owner: TaskOwner
+    owner_id: RuntimeId
+    name: str | None = None
+    validator: TaskValidator = field(default_factory=Human)
     id: TaskId = field(default_factory=lambda: generate_aranea_id(TaskId))
-    agent_id: RuntimeId | None = None
+    executor: Executor | None = None
     notes: dict[str, str] = field(default_factory=dict)
     work_status: TaskWorkStatus = TaskWorkStatus.NEW
     discussion_status: TaskDiscussionStatus = TaskDiscussionStatus.NONE
-    validator: TaskValidator = field(default_factory=Human)
 
     @cached_property
     def event_log(self) -> EventLog:
@@ -228,10 +254,9 @@ class Task:
 
     @property
     def main_status_printout(self) -> str:
-        """String representation of the task."""
+        """String representation of the task as it would appear as a main task."""
         template = """
         Id: {id}
-        Name: {name}
         Owner: {owner}
         Work Status: {status}
         Discussion Status: {discussion_status}
@@ -241,8 +266,7 @@ class Task:
         """
         return dedent_and_strip(template).format(
             id=self.id,
-            name=self.name,
-            owner=self.owner,
+            owner=self.owner_id,
             status=self.work_status,
             discussion_status=self.discussion_status,
             description=self.description,
@@ -253,30 +277,34 @@ class Task:
         return self.main_status_printout
 
     @property
+    def executor_id(self) -> RuntimeId | None:
+        """Id of the task's executor."""
+        return self.executor.id if self.executor else None
+
+    @property
     def subtask_status_printout(self) -> str:
-        """String representation of task as a subtask."""
-        not_done_template = """
+        """String representation of task as it would appear as a subtask."""
+        if self.work_status in {TaskWorkStatus.COMPLETED, TaskWorkStatus.CANCELLED}:
+            template = """
+            Id: {id}
+            Name: {name}
+            """
+            return dedent_and_strip(template).format(
+                id=self.id,
+                name=self.name,
+            )
+        template = """
         Id: {id}
         Name: {name}
         Work Status: {status}
         Discussion Status: {discussion_status}
-        Delegated Agent Id: {agent_id}
         """
-        done_template = """
-        Id: {id}
-        Name: {name}
-        """
-        template = (
-            done_template
-            if self.work_status in {TaskWorkStatus.COMPLETED, TaskWorkStatus.CANCELLED}
-            else not_done_template
-        )
         return dedent_and_strip(template).format(
             id=self.id,
-            agent_id=self.agent_id,
             name=self.name,
             status=self.work_status,
             discussion_status=self.discussion_status,
+            agent_id=self.executor_id,
         )
 
 
@@ -326,10 +354,7 @@ class Orchestrator:
 
     blueprint: Blueprint
     task: Task
-
-    def __post_init__(self) -> None:
-        """Post-initialization."""
-        self.task.agent_id = self.id
+    output_dir: Path
 
     @property
     def id(self) -> RuntimeId:
@@ -461,11 +486,6 @@ class Orchestrator:
         """Name of the agent."""
         return self.blueprint.name
 
-    @property
-    def output_dir(self) -> Path:
-        """Directory for the agent's output files."""
-        return Path(self.blueprint.output_dir)
-
     def serialize(self) -> dict[str, Any]:
         """Serialize the agent to a dict."""
         return asdict(self.blueprint)
@@ -475,40 +495,90 @@ class Orchestrator:
         yaml.dump(asdict(self.blueprint), self.serialization_location)
 
     @classmethod
-    def load(cls, blueprint_location: Path, task: Task) -> Self:
+    def load(cls, blueprint_location: Path, task: Task, output_dir: Path) -> Self:
         """Deserialize an Aranea agent from a YAML file."""
         blueprint_data = yaml.load(blueprint_location)
         blueprint_data["task_history"] = tuple(blueprint_data["task_history"])
-        return cls(blueprint=Blueprint(**blueprint_data), task=task)
+        return cls(
+            blueprint=Blueprint(**blueprint_data), task=task, output_dir=output_dir
+        )
 
-    def ask_question(self, question: str) -> str:
-        """Ask a question regarding the task to the owner of the task."""
-        return self.task.owner.answer_question(question)
+
+@dataclass
+class Reply:
+    """A reply from the main agent."""
+
+    content: str
+    continue_func: Callable[[str], Coroutine[Any, Any, str]]
+
+    async def continue_conversation(self, message: str) -> str:
+        """Continue the conversation with a message."""
+        return await self.continue_func(message)
+
+
+def delegate(task: Task) -> Executor:
+    """Delegate a task to a specific subagent, or create a new one to handle the task."""
+    raise NotImplementedError
+
+
+@dataclass
+class Aranea:
+    """Main interfacing class for the agent."""
+
+    output_dir: Path
+    blueprint_dir: Path
+
+    @property
+    def id(self) -> RuntimeId:
+        """Runtime id of the agent."""
+        return RuntimeId(str(generate_uuid()))
+
+    @property
+    def name(self) -> str:
+        """Name of the agent."""
+        return f"Aranea_{self.id}"
+
+    async def run(self, message: str) -> HivemindReply:
+        """Run the agent with a message, and a way to continue the conversation. Rerunning this method starts a new conversation."""
+        task = Task(
+            description=TaskDescription(message),
+            owner_id=self.id,
+        )
+        reply_text = await (executor := delegate(task)).execute()
+
+        async def continue_conversation(message: str) -> str:
+            """Continue the conversation with a message."""
+            return await executor.execute(message)
+
+        return Reply(
+            content=reply_text,
+            continue_func=continue_conversation,
+        )
 
 
 # ....
-# > create main aranea hivemind agent to receive tasks
+# > test task reception
+# > no need to print out agent ids for tasks
+# > serialization dir to runtime
+# > merge blueprint dir and working dir
 # > delegate subtasks to subagents: keep as test function for now
-# > execute_task() must be async
 # choose action
 # ....
-# > next action execution
-
+# > next action execution > placeholder for `wait` action > every action has an output > event log for task also includes agent decisions and thoughts
 
 """action choice
 {action_choice_reasoning} # attribute > reasoning step: think through what knowledge is relevant
 {action_choice}
 "extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
-"discuss_with_agent",
-"discuss_with_task_owner", # doesn't send actual message yet, just brings up the context for sending message
-"wait",
-# > event log for task also includes agent decisions and thoughts
+"discuss", # doesn't send actual message yet, just brings up the context for sending message
 """
 
+# > execute_task() must be async
 """action execution
 {action_context}
 {action_execution_reasoning}
 {action_execution}
+
 "extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
 > agent_search_strategy
 "discuss_with_agent",
@@ -522,8 +592,6 @@ class Orchestrator:
     "task_completed",
     "task_blocked",
     "query",
-"wait",
-# > every action has an output
 """
 
 
@@ -659,7 +727,7 @@ null_test_task = Task(
     description=TaskDescription(
         information="Some information.", definition_of_done="Some definition of done."
     ),
-    owner=NullTestTaskOwner(),
+    owner_id=NullTestTaskOwner(),
 )
 
 example_test_task = Task(
@@ -668,7 +736,7 @@ example_test_task = Task(
         information="The files on the flash drive are currently unorganized.",
         definition_of_done="N/A",
     ),
-    owner=Human(),
+    owner_id=Human(),
 )
 
 TEST_DIR = ".data/test/agents"
