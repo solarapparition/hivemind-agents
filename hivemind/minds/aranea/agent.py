@@ -510,7 +510,7 @@ class Orchestrator:
         )
 
     async def execute(self, message: str | None = None) -> str:
-        """Execute the subtask. Adds a message to the task's event log if provided, and adds own message to the event log at the end of execution."""
+        """Execute the task. Adds a message to the task's event log if provided, and adds own message to the event log at the end of execution."""
         raise NotImplementedError
 
 
@@ -526,9 +526,21 @@ class Reply:
         return await self.continue_func(message)
 
 
-def delegate(task: Task) -> Executor:
+def delegate(
+    task: Task,
+    rank_limit: int | None = None,
+    max_candidates: int = 10,
+    agent_files_dir: Path = DEFAULT_AGENT_FILES_DIR,
+) -> Executor:
     """Delegate a task to a specific executor, or create a new one to handle the task."""
-    raise NotImplementedError
+
+    candidates = search_blueprints(task, rank_limit, agent_files_dir)
+    # candidates are assumed to be ordered by task capability score
+    candidates = (load_executor(candidate) for candidate in candidates[:max_candidates])
+    for candidate in candidates:
+        if candidate.accepts(task):
+            return candidate
+    return make_executor(task)
 
 
 @dataclass
@@ -568,6 +580,7 @@ class Aranea:
 
 # create new agent for when no matching agent
 # ....
+# > search_blueprints assumed to order by score
 # > generic bot: coding agent
 # > generic bot: oai assistant
 # > generic bot: browser
