@@ -1,14 +1,13 @@
 """Structure for Aranea agents."""
 
-import re
 from enum import Enum
 from dataclasses import dataclass, asdict, field
 from functools import cached_property
 from pathlib import Path
+from uuid import uuid4 as generate_uuid
 from typing import (
     NewType,
     NamedTuple,
-    Sequence,
     Any,
     Self,
     Protocol,
@@ -16,11 +15,10 @@ from typing import (
     Callable,
     Coroutine,
 )
-from uuid import uuid4 as generate_uuid
 
 from hivemind.toolkit.text_formatting import dedent_and_strip
 from hivemind.toolkit.yaml_tools import yaml
-from hivemind.toolkit.types import HivemindAgent, HivemindReply
+from hivemind.toolkit.types import HivemindReply
 
 BlueprintId = NewType("BlueprintId", str)
 TaskId = NewType("TaskId", str)
@@ -59,19 +57,6 @@ class Blueprint:
     reasoning: str
     knowledge: str
     id: BlueprintId = field(default_factory=lambda: generate_aranea_id(BlueprintId))
-
-    # def __post_init__(self) -> None:
-    #     """Post-initialization."""
-    #     if not self.core_template:
-    #         self.core_template = self.role.default_core_template
-
-
-class TaskOwner(Protocol):
-    """The owner of a task that you can ask questions to."""
-
-    def receive_executor_message(self, message: str) -> str:
-        """Receive a message regarding the task."""
-        raise NotImplementedError
 
 
 class TaskWorkStatus(Enum):
@@ -214,12 +199,8 @@ class Executor(Protocol):
         """Runtime id of the executor."""
         raise NotImplementedError
 
-    def receive(self, message: str) -> None:
-        """Receive a message from another agent."""
-        raise NotImplementedError
-
     async def execute(self, message: str | None = None) -> str:
-        """Execute the subtask."""
+        """Execute the subtask. Adds a message to the task's event log if provided, and adds own message to the event log at the end of execution."""
         raise NotImplementedError
 
 
@@ -524,6 +505,10 @@ class Orchestrator:
             files_parent_dir=files_parent_dir,
         )
 
+    async def execute(self, message: str | None = None) -> str:
+        """Execute the subtask. Adds a message to the task's event log if provided, and adds own message to the event log at the end of execution."""
+        raise NotImplementedError
+
 
 @dataclass
 class Reply:
@@ -578,7 +563,20 @@ class Aranea:
 
 
 # ....
-# delegate subtasks to subagents: keep as test function for now
+# > rank can be int or none
+# > rank of none is "indeterminate"
+# > rank of none can access all agents
+# > rank is calculated from blueprint, OR (if not available) from rank of subagents (1+max(subagent ranks))
+# > rank must not be none when serializing; if so then raise assertion error; we expect serialization to only happen after agents for subtasks have been serialized themselves
+# > generic bot: coding agent
+# > generic bot: oai assistant
+# > generic bot: browser
+# > agent retrieval: success_rate/(1+rank/10)
+# > test
+# create new agent for when no matching agent
+# ....
+# > test
+# initial delegation: keep as dummy function for now
 # choose action
 # ....
 # > next action execution > placeholder for `wait` action > every action has an output > event log for task also includes agent decisions and thoughts
