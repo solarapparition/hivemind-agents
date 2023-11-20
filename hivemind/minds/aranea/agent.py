@@ -528,9 +528,9 @@ class Reply:
 
 def delegate(
     task: Task,
+    agent_files_dir: Path,
     rank_limit: int | None = None,
     max_candidates: int = 10,
-    agent_files_dir: Path = DEFAULT_AGENT_FILES_DIR,
 ) -> Executor:
     """Delegate a task to a specific executor, or create a new one to handle the task."""
 
@@ -547,8 +547,7 @@ def delegate(
 class Aranea:
     """Main interfacing class for the agent."""
 
-    output_dir: Path
-    blueprint_dir: Path
+    agent_files_dir: Path = Path(".data/aranea")
 
     @cached_property
     def id(self) -> RuntimeId:
@@ -562,6 +561,9 @@ class Aranea:
 
     async def run(self, message: str) -> HivemindReply:
         """Run the agent with a message, and a way to continue the conversation. Rerunning this method starts a new conversation."""
+        if not self.agent_files_dir.exists():
+            self.agent_files_dir.mkdir(parents=True, exist_ok=True)
+
         task = Task(
             description=TaskDescription(message),
             owner_id=self.id,
