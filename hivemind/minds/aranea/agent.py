@@ -52,7 +52,7 @@ class Blueprint:
 
     name: str
     role: Role
-    rank: int
+    rank: int | None
     task_history: TaskHistory
     reasoning: str
     knowledge: str
@@ -115,9 +115,12 @@ class TaskValidator(Protocol):
 class Human:
     """A human part of the hivemind. Can be used as either the owner or validator of a task."""
 
-    def answer_question(self, question: str) -> str:
-        """Answer a question regarding the task."""
-        return input(f"Answer to '{question}': ")
+    name: str = "Human"
+
+    @property
+    def id(self) -> RuntimeId:
+        """Runtime id of the agent."""
+        return RuntimeId(self.name)
 
     def validate(self, task: "Task") -> TaskValidation:
         """Validate the work done by the agent."""
@@ -347,7 +350,7 @@ class Orchestrator:
         return self.blueprint.id
 
     @property
-    def rank(self) -> int:
+    def rank(self) -> int | None:
         """Rank of the agent."""
         return self.blueprint.rank
 
@@ -483,6 +486,7 @@ class Orchestrator:
 
     def serialize(self) -> dict[str, Any]:
         """Serialize the agent to a dict."""
+        assert self.rank is not None, "Rank must not be None when serializing."
         return asdict(self.blueprint)
 
     def save(self) -> None:
@@ -523,7 +527,7 @@ class Reply:
 
 
 def delegate(task: Task) -> Executor:
-    """Delegate a task to a specific subagent, or create a new one to handle the task."""
+    """Delegate a task to a specific executor, or create a new one to handle the task."""
     raise NotImplementedError
 
 
@@ -562,18 +566,12 @@ class Aranea:
         )
 
 
+# create new agent for when no matching agent
 # ....
-# > rank can be int or none
-# > rank of none is "indeterminate"
-# > rank of none can access all agents
-# > rank is calculated from blueprint, OR (if not available) from rank of subagents (1+max(subagent ranks))
-# > rank must not be none when serializing; if so then raise assertion error; we expect serialization to only happen after agents for subtasks have been serialized themselves
 # > generic bot: coding agent
 # > generic bot: oai assistant
 # > generic bot: browser
-# > agent retrieval: success_rate/(1+rank/10)
-# > test
-# create new agent for when no matching agent
+# rank is calculated from blueprint, OR (if not available) from rank of subagents (1+max(subagent ranks))
 # ....
 # > test
 # initial delegation: keep as dummy function for now
@@ -596,7 +594,9 @@ class Aranea:
 {action_execution}
 
 "extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
+# > agent retrieval: success_rate/(1+rank/10)
 > agent_search_strategy
+> rank of none can access all agents
 "discuss_with_agent",
     # these are all options for individual discussion messages
     "informational",
