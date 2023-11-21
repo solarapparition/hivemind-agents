@@ -6,6 +6,7 @@ from functools import cached_property
 from pathlib import Path
 from uuid import uuid4 as generate_uuid
 from typing import (
+    Iterator,
     NewType,
     NamedTuple,
     Any,
@@ -46,7 +47,7 @@ class Role(Enum):
     BOT = "bot"
 
 
-@dataclass(frozen=True)
+@dataclass
 class Blueprint:
     """A blueprint for an Aranea agent."""
 
@@ -151,6 +152,10 @@ class TaskList:
         # if we're printing out the whole task list, assume these are subtasks
         return "\n".join([task.subtask_status_printout for task in self.tasks])
 
+    def __iter__(self) -> Iterator["Task"]:
+        """Iterate over the task list."""
+        return iter(self.tasks)
+
     def filter_by_status(self, status: TaskWorkStatus) -> Self:
         """Filter the task list by status."""
         return TaskList(
@@ -200,6 +205,15 @@ class Executor(Protocol):
     @property
     def id(self) -> RuntimeId:
         """Runtime id of the executor."""
+        raise NotImplementedError
+
+    @property
+    def rank(self) -> int | None:
+        """Rank of the executor."""
+        raise NotImplementedError
+
+    def accepts(self, task: "Task") -> bool:
+        """Decides whether the executor accepts a task."""
         raise NotImplementedError
 
     async def execute(self, message: str | None = None) -> str:
@@ -350,9 +364,24 @@ class Orchestrator:
         return self.blueprint.id
 
     @property
+    def executor_max_rank(self) -> int | None:
+        """Maximum rank of the agent's task executors."""
+        executors = [subtask.executor for subtask in self.task.subtasks]
+        ranks = [
+            executor.rank
+            for executor in executors
+            if executor is not None and executor.rank is not None
+        ]
+        # if filtered ranks is less than num executors, it means some task have either not been delegated or its executor is unranked
+        return None if len(ranks) != len(executors) else max(ranks)
+
+    @property
     def rank(self) -> int | None:
         """Rank of the agent."""
-        return self.blueprint.rank
+        # we always go with existing rank if available b/c executor_max_rank varies and could be < existing rank between runs
+        if self.blueprint.rank is not None:
+            return self.blueprint.rank
+        return None if self.executor_max_rank is None else 1 + self.executor_max_rank
 
     @property
     def task_history(self) -> TaskHistory:
@@ -486,12 +515,15 @@ class Orchestrator:
 
     def serialize(self) -> dict[str, Any]:
         """Serialize the agent to a dict."""
-        assert self.rank is not None, "Rank must not be None when serializing."
         return asdict(self.blueprint)
 
-    def save(self) -> None:
+    def save(self, update_blueprint: bool = True) -> None:
         """Serialize the agent to YAML."""
-        yaml.dump(asdict(self.blueprint), self.serialization_location)
+        if update_blueprint:
+            self.blueprint.rank = self.rank
+        # assume that at the point of saving, all executors have been saved and so would have a rank
+        assert self.blueprint.rank is not None, "Rank must not be None when saving."
+        yaml.dump(self.serialize(), self.serialization_location)
 
     @classmethod
     def load(
