@@ -1,5 +1,7 @@
 """Structure for Aranea agents."""
 
+import asyncio
+import contextlib
 from enum import Enum
 from dataclasses import dataclass, asdict, field
 from functools import cached_property
@@ -12,6 +14,8 @@ from typing import (
     Any,
     Self,
     Protocol,
+    Sequence,
+    Set,
     TypeVar,
     Callable,
     Coroutine,
@@ -26,6 +30,8 @@ TaskId = NewType("TaskId", str)
 RuntimeId = NewType("RuntimeId", str)
 TaskHistory = list[TaskId]
 IdTypeT = TypeVar("IdTypeT", BlueprintId, TaskId)
+default_bot_base_capabilities = []
+default_human_base_capabilities = []
 
 
 def generate_aranea_id(id_type: type[IdTypeT]) -> IdTypeT:
@@ -114,7 +120,7 @@ class TaskValidator(Protocol):
 
 
 class Human:
-    """A human part of the hivemind. Can be used as either the owner or validator of a task."""
+    """A human part of the hivemind. Can be slotted into various specialized roles for tasks that the agent can't yet handle autonomously."""
 
     name: str = "Human"
 
@@ -139,6 +145,11 @@ class Human:
 
         feedback: str = input("Provide feedback: ")
         return TaskValidation(validation_result, feedback)
+
+    def advise(self, prompt: str) -> str:
+        """Get input from the human."""
+        print(prompt)
+        return input("Enter your response: ").strip()
 
 
 @dataclass
@@ -183,7 +194,7 @@ class TaskDescription:
     """Description of a task."""
 
     information: str
-    definition_of_done: str = ""
+    definition_of_done: str | None = None
 
     def __str__(self) -> str:
         """String representation of the task description."""
@@ -525,6 +536,11 @@ class Orchestrator:
         assert self.blueprint.rank is not None, "Rank must not be None when saving."
         yaml.dump(self.serialize(), self.serialization_location)
 
+    async def execute(self, message: str | None = None) -> str:
+        """Execute the task. Adds a message to the task's event log if provided, and adds own message to the event log at the end of execution."""
+        raise NotImplementedError
+
+
     @classmethod
     def load(
         cls,
@@ -540,11 +556,29 @@ class Orchestrator:
             task=task,
             files_parent_dir=files_parent_dir,
         )
-
-    async def execute(self, message: str | None = None) -> str:
-        """Execute the task. Adds a message to the task's event log if provided, and adds own message to the event log at the end of execution."""
-        raise NotImplementedError
-
+    
+    @classmethod
+    def from_task(
+        cls,
+        task: Task,
+        delegator: "Delegator",
+    ) -> Self:
+        """Create an Aranea agent from a task."""
+        
+        breakpoint()
+        # blueprint = Blueprint(
+        #     name=f"Aranea_{task.id}",
+        #     role=Role.ORCHESTRATOR,
+        #     rank=None,
+        #     task_history=[task.id],
+        #     reasoning="",
+        #     knowledge="",
+        # )
+        # return cls(
+        #     blueprint=blueprint,
+        #     task=task,
+        #     files_parent_dir=delegator.executors_dir,
+        # )
 
 @dataclass
 class Reply:
@@ -558,28 +592,181 @@ class Reply:
         return await self.continue_func(message)
 
 
-def delegate(
+def search_blueprints(
     task: Task,
     agent_files_dir: Path,
     rank_limit: int | None = None,
-    max_candidates: int = 10,
-) -> Executor:
-    """Delegate a task to a specific executor, or create a new one to handle the task."""
+) -> list[Blueprint]:
+    """Search for blueprints of executors that can handle a task."""
+    # > order by score
+    # > agent retrieval: success_rate/(1+rank/10)
+    # > rank of none can access all agents
+    return []
 
-    candidates = search_blueprints(task, rank_limit, agent_files_dir)
-    # candidates are assumed to be ordered by task capability score
-    candidates = (load_executor(candidate) for candidate in candidates[:max_candidates])
-    for candidate in candidates:
-        if candidate.accepts(task):
-            return candidate
-    return make_executor(task)
+
+def load_executor(blueprint: Blueprint) -> Executor:
+    """Factory function for loading an executor from a blueprint."""
+    raise NotImplementedError
+
+
+class Advisor(Protocol):
+    """A single-reply advisor for some issue."""
+
+    def advise(self, prompt: str) -> str:
+        """Advise on some issue."""
+        raise NotImplementedError
+
+
+class CapabilityMappingError(Exception):
+    """Error raised when a task cannot be mapped to a capability."""
+
+
+@dataclass
+class BaseCapability:
+    """A base capability of an Aranea agent."""
+
+
+def automap_base_capability(
+    task: Task, base_capabilities: Sequence[BaseCapability]
+) -> BaseCapability | None:
+    """Automatically map a task to a base capability if possible."""
+    if not base_capabilities:
+        return None
+    raise NotImplementedError
+    return BaseCapability()
+
+
+def get_choice(prompt: str, allowed_choices: Set[Any], advisor: Advisor) -> int:
+    """Get a choice from the advisor."""
+    while True:  # type: ignore
+        with contextlib.suppress(ValueError):
+            return int(advisor.advise(prompt))
+        advisor.advise(f"Invalid input. Please enter {allowed_choices}.")
+
+
+@dataclass
+class Delegator:
+    """Delegates tasks to executors, creating new ones if needed."""
+
+    executors_dir: Path
+    bot_base_capabilities: Sequence[BaseCapability]
+    human_base_capabilities: Sequence[BaseCapability]
+
+    def delegate(
+        self,
+        task: Task,
+        rank_limit: int | None = None,
+        max_candidates: int = 10,
+    ) -> bool:
+        """Delegate a task to a specific executor, or create a new one to handle the task. Returns whether delegation was successful."""
+        candidates = search_blueprints(task, self.executors_dir, rank_limit)
+
+        # candidates are assumed to be ordered by task capability score
+        candidates = (
+            load_executor(candidate) for candidate in candidates[:max_candidates]
+        )
+        for candidate in candidates:
+            if candidate.accepts(task):
+                task.executor = candidate
+                return True
+        return False
+
+    def map_base_capability(self, task: Task) -> BaseCapability | None:
+        """Map a task to a base capability if possible."""
+        human = Human()
+        base_capability_question = dedent_and_strip(
+            """
+            Is this task a base capability?
+            ```
+            {task}
+            ```
+            
+            0: No.
+            1: Yes.
+            """
+        ).format(task=task.description)
+        is_base_capability = bool(
+            get_choice(base_capability_question, allowed_choices={0, 1}, advisor=human)
+        )
+        if not is_base_capability:
+            return
+
+        # now we know it's a base capability
+        automapped_capability = automap_base_capability(
+            task, self.bot_base_capabilities
+        )
+        capability_validation_question = dedent_and_strip(
+            """
+            I have identified the following base capability for this task:
+            "{automapped_capability}"
+
+            Please confirm whether this is correct:
+            0: No.
+            1: Yes.
+            """
+        ).format(automapped_capability=automapped_capability)
+        if not automapped_capability:
+            capability_validation_question = dedent_and_strip(
+                """
+                I have not identified any base capabilities for this task.
+
+                Please confirm whether this is correct:
+                0: No.
+                1: Yes.
+                """
+            )
+        is_correct = bool(
+            get_choice(
+                capability_validation_question,
+                allowed_choices={0, 1},
+                advisor=human,
+            )
+        )
+        if is_correct:
+            return automapped_capability
+
+        # now we know automapped capability didn't work
+        manual_capability_prompt = "Automated capability mapping failed. Please choose a base capability for this task:"
+        raise NotImplementedError
+        manual_capability_choice = get_choice(
+            manual_capability_prompt,
+            allowed_choices=set(range(len(self.all_base_capabilities))),
+            advisor=human,
+        )
+
+        # TODO: basic coding task case: 20 lines or less of base python > coding bot will be equipped with function it wrote
+        # TODO: basic search task case: search for basic info about a concept
+        # TODO: basic file reading/writing task case
+
+    def make_executor(self, task: Task) -> Executor:
+        """Factory for creating a new executor for a task."""
+        if base_capability := self.map_base_capability(task):
+            raise NotImplementedError
+            return create_base_capability(base_capability)
+
+        # now we know it's not a basic task that a bot can handle, so we need an orchestrator
+        return Orchestrator.from_task(task, self)
 
 
 @dataclass
 class Aranea:
     """Main interfacing class for the agent."""
 
-    agent_files_dir: Path = Path(".data/aranea")
+    files_dir: Path = Path(".data/aranea")
+    bot_base_capabilities: Sequence[BaseCapability] = default_bot_base_capabilities
+    human_base_capabilities: Sequence[BaseCapability] = default_human_base_capabilities
+
+    @property
+    def executors_dir(self):
+        """Directory for executors."""
+        return self.files_dir / "executors"
+
+    @cached_property
+    def delegator(self) -> Delegator:
+        """Delegator for assigning tasks to executors."""
+        return Delegator(
+            self.executors_dir, self.bot_base_capabilities, self.human_base_capabilities
+        )
 
     @cached_property
     def id(self) -> RuntimeId:
@@ -593,18 +780,27 @@ class Aranea:
 
     async def run(self, message: str) -> HivemindReply:
         """Run the agent with a message, and a way to continue the conversation. Rerunning this method starts a new conversation."""
-        if not self.agent_files_dir.exists():
-            self.agent_files_dir.mkdir(parents=True, exist_ok=True)
+        if not self.executors_dir.exists():
+            self.executors_dir.mkdir(parents=True, exist_ok=True)
 
         task = Task(
             description=TaskDescription(message),
             owner_id=self.id,
         )
-        reply_text = await (executor := delegate(task)).execute()
+        delegation_successful = self.delegator.delegate(task)
+        # blueprints represent a set of known capabilities; failure means we must create a new executor
+        if not delegation_successful:
+            task.executor = self.delegator.make_executor(task)
+
+        assert task.executor is not None, "Task executor assignment failed."
+        reply_text = await task.executor.execute()
 
         async def continue_conversation(message: str) -> str:
             """Continue the conversation with a message."""
-            return await executor.execute(message)
+            assert (
+                task.executor is not None
+            ), "Task executor must exist in order to be executed."
+            return await task.executor.execute(message)
 
         return Reply(
             content=reply_text,
@@ -612,13 +808,17 @@ class Aranea:
         )
 
 
-# create new agent for when no matching agent
+# create new executor
 # ....
+# > task: learn how to create langchain agent
+# > task: full flow of learning how to perform some skill from a tutorial
+# > convert any mention of agent to executor
+# > manager -> orchestrator
+# > subagent choice must be made by orchestrator (to be able to scale with llm intelligence)
 # > search_blueprints assumed to order by score
 # > generic bot: coding agent
 # > generic bot: oai assistant
 # > generic bot: browser
-# rank is calculated from blueprint, OR (if not available) from rank of subagents (1+max(subagent ranks))
 # ....
 # > test
 # initial delegation: keep as dummy function for now
@@ -641,9 +841,6 @@ class Aranea:
 {action_execution}
 
 "extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
-# > agent retrieval: success_rate/(1+rank/10)
-> agent_search_strategy
-> rank of none can access all agents
 "discuss_with_agent",
     # these are all options for individual discussion messages
     "informational",
@@ -803,14 +1000,14 @@ example_test_task = Task(
 )
 
 TEST_DIR = ".data/test/agents"
-test_blueprint = Blueprint(
-    name="Test blueprint",
-    rank=0,
-    task_history=(TaskId("task1"), TaskId("task2")),
-    reasoning="Primary directive here.",
-    knowledge="Adaptations from past tasks.",
-    output_dir=TEST_DIR,
-)
+# test_blueprint = Blueprint(
+#     name="Test blueprint",
+#     rank=0,
+#     task_history=(TaskId("task1"), TaskId("task2")),
+#     reasoning="Primary directive here.",
+#     knowledge="Adaptations from past tasks.",
+#     output_dir=TEST_DIR,
+# )
 
 
 def test_serialize() -> None:
@@ -849,11 +1046,20 @@ def test_id_generation() -> None:
     ), f"{len(blueprint_id)} {len(task_id)}"
 
 
+async def test_full() -> None:
+    """Run a full flow on an example task."""
+    aranea = Aranea(Path(".data/test/aranea"))
+    task = "Reorganize files on a flash drive"
+    await aranea.run(task)
+
+
 def test() -> None:
     """Run tests."""
-    test_serialize()
-    test_deserialize()
-    test_id_generation()
+    # test_serialize()
+    # test_deserialize()
+    # test_id_generation()
+    # test_full()
+    asyncio.run(test_full())
 
 
 if __name__ == "__main__":
