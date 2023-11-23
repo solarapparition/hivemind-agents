@@ -113,7 +113,7 @@ class Event:
         return f"[{self.timestamp}] {self.description}"
 
     def to_str_with_pov(self, pov_id: RuntimeId) -> str:
-        """String representation of the event with a point of view from a certain agent."""
+        """String representation of the event with a point of view from a certain executor."""
         return replace_agent_id(str(self), "You", pov_id)
 
 
@@ -121,7 +121,7 @@ class TaskValidator(Protocol):
     """A validator of a task."""
 
     def validate(self, task: "Task") -> TaskValidation:
-        """Validate the work done by the agent for a task."""
+        """Validate the work done by an executor for a task."""
         raise NotImplementedError
 
 
@@ -132,11 +132,11 @@ class Human:
 
     @property
     def id(self) -> RuntimeId:
-        """Runtime id of the agent."""
+        """Runtime id of the human."""
         return RuntimeId(self.name)
 
     def validate(self, task: "Task") -> TaskValidation:
-        """Validate the work done by the agent."""
+        """Validate the work done by an executor."""
         print(f'Please validate the following task:\n"{str(task)}"')
         while True:
             validation_input: str = (
@@ -187,7 +187,7 @@ class EventLog:
     events: list[Event] = field(default_factory=list)
 
     def to_str_with_pov(self, pov_id: RuntimeId) -> str:
-        """String representation of the event log with a point of view from a certain agent."""
+        """String representation of the event log with a point of view from a certain executor."""
         return "\n".join([event.to_str_with_pov(pov_id) for event in self.events])
 
     def recent(self, num_recent: int) -> Self:
@@ -263,7 +263,7 @@ class Task:
         return TaskList()
 
     def validate(self) -> TaskValidation:
-        """Validate the work done by the agent."""
+        """Validate the work done by the executor."""
         return self.validator.validate(self)
 
     @property
@@ -318,15 +318,14 @@ class Task:
             name=self.name,
             status=self.work_status,
             discussion_status=self.discussion_status,
-            agent_id=self.executor_id,
         )
 
 
 @dataclass
 class CoreState:
-    """Core runtime state of an agent."""
+    """Core runtime state of an Aranea subagent."""
 
-    agent_id: RuntimeId
+    id: RuntimeId
     knowledge: str
     main_task: Task
     subtasks: TaskList
@@ -358,13 +357,13 @@ class CoreState:
             delegated_subtasks=delegated_subtasks,
             new_subtasks=new_subtasks,
             blocked_subtasks=blocked_subtasks,
-            event_log=self.events.recent(10).to_str_with_pov(self.agent_id),
+            event_log=self.events.recent(10).to_str_with_pov(self.id),
         )
 
 
 @dataclass
 class Orchestrator:
-    """A recursively auto-specializing agent."""
+    """A recursively auto-specializing Aranea subagent."""
 
     blueprint: Blueprint
     task: Task
@@ -372,17 +371,17 @@ class Orchestrator:
 
     @property
     def id(self) -> RuntimeId:
-        """Runtime id of the agent."""
+        """Runtime id of the orchestrator."""
         return RuntimeId(f"{self.blueprint_id}_{self.task.id}")
 
     @property
     def blueprint_id(self) -> BlueprintId:
-        """Id of the agent."""
+        """Id of the orchestrator."""
         return self.blueprint.id
 
     @property
     def executor_max_rank(self) -> int | None:
-        """Maximum rank of the agent's task executors."""
+        """Maximum rank of the orchestrator's task executors."""
         executors = [subtask.executor for subtask in self.task.subtasks]
         ranks = [
             executor.rank
@@ -394,20 +393,26 @@ class Orchestrator:
 
     @property
     def rank(self) -> int | None:
-        """Rank of the agent."""
+        """Rank of the orchestrator."""
         # we always go with existing rank if available b/c executor_max_rank varies and could be < existing rank between runs
         if self.blueprint.rank is not None:
             return self.blueprint.rank
-        return None if self.executor_max_rank is None else 1 + self.executor_max_rank
+        if (
+            rank := None
+            if self.executor_max_rank is None
+            else 1 + self.executor_max_rank
+        ) is not None:
+            assert rank < 1, "Rank must be >= 1."
+        return rank
 
     @property
     def task_history(self) -> TaskHistory:
-        """History of tasks completed by the agent."""
+        """History of tasks completed by the orchestrator."""
         return self.blueprint.task_history
 
     @property
     def reasoning(self) -> Reasoning:
-        """Instructions for the agent."""
+        """Instructions for the orchestrator for various tasks."""
         return self.blueprint.reasoning
 
     @property
@@ -417,7 +422,7 @@ class Orchestrator:
 
     @property
     def role(self) -> Role:
-        """Role of the agent."""
+        """Role of the orchestrator."""
         return self.blueprint.role
 
     @property
@@ -425,7 +430,7 @@ class Orchestrator:
         """Template for the core state."""
         template = """
         ## MISSION:
-        You are an expert task manager that specializes in managing the status and delegating the execution of a specific task and its subtasks to AGENTS that can execute those tasks while communicating with the TASK OWNER to gather requirements on the task. Your goal is to use your agents to complete the task as efficiently as possible.
+        You are an expert task manager that specializes in managing the status and delegating the execution of a specific task and its subtasks to EXECUTORS that can execute those tasks while communicating with the TASK OWNER to gather requirements on the task. Your goal is to use your executors to complete the task as efficiently as possible.
 
         ## KNOWLEDGE:
         In addition to the general background knowledge of your language model, you have the following, more specialized knowledge that may be relevant to the task at hand:
@@ -440,12 +445,12 @@ class Orchestrator:
         ```end_of_main_task_description
 
         ## SUBTASK STATUSES:
-        Subtasks are tasks that must be completed in order to complete the main task; you do not perform subtasks yourself, but instead delegate them to other agents. This list is NOT exhaustive; you may discover additional subtasks.
+        Subtasks are tasks that must be completed in order to complete the main task; you do not perform subtasks yourself, but instead delegate them to other executors. This list is NOT exhaustive; you may discover additional subtasks.
 
         Typically, tasks that are COMPLETED, CANCELLED, DELEGATED, or IN_VALIDATION do not need attention unless you discover information that changes the status of the subtask. In contrast, tasks that are NEW or BLOCKED will need action from you to start/continue execution.
 
         ### SUBTASKS (COMPLETED):
-        These tasks have been validated as complete by agents; use this section as a reference for progress in the main task.
+        These tasks have been validated as complete by executors; use this section as a reference for progress in the main task.
         ```start_of_completed_subtasks
         {completed_subtasks}
         ```end_of_completed_subtasks
@@ -457,19 +462,19 @@ class Orchestrator:
         ```end_of_cancelled_subtasks
 
         ### SUBTASKS (IN VALIDATION):
-        These subtasks have been reported as completed by agents, but are still being validated by validators.
+        These subtasks have been reported as completed by executors, but are still being validated by validators.
         ```start_of_in_validation_subtasks
         {in_validation_subtasks}
         ```end_of_in_validation_subtasks
 
         ### SUBTASKS (DELEGATED):
-        These are subtasks that you have delegated to other agents and that are currently being executed by them.
+        These are subtasks that you have delegated to other executors and that are currently being executed by them.
         ```start_of_delegated_subtasks
         {delegated_subtasks}
         ```end_of_delegated_subtasks
 
         ### SUBTASKS (NEW):
-        These subtasks are newly identified and not yet delegated to any agent:
+        These subtasks are newly identified and not yet delegated to any executor:
         ```start_of_new_subtasks
         {new_subtasks}
         ```end_of_new_subtasks
@@ -490,9 +495,9 @@ class Orchestrator:
 
     @property
     def core_state(self) -> CoreState:
-        """Overall state of the agent."""
+        """Overall state of the orchestrator."""
         return CoreState(
-            agent_id=self.id,
+            id=self.id,
             knowledge=self.knowledge,
             main_task=self.task,
             subtasks=self.task.subtasks,
@@ -502,40 +507,40 @@ class Orchestrator:
 
     @property
     def files_dir(self) -> Path:
-        """Directory for files related to the agent."""
+        """Directory for files related to the orchestrator."""
         return self.files_parent_dir / self.id
 
     @property
     def serialization_location(self) -> Path:
-        """Return the location where the agent should be serialized."""
+        """Return the location where the orchestrator should be serialized."""
         return self.files_dir / "blueprint.yml"
 
     @property
     def output_dir(self) -> Path:
-        """Output directory of the agent."""
+        """Output directory of the orchestrator."""
         return self.files_dir / "output"
 
     @property
     def workspace_dir(self) -> Path:
-        """Workspace directory of the agent."""
+        """Workspace directory of the orchestrator."""
         return self.files_dir / "workspace"
 
     @property
     def name(self) -> str:
-        """Name of the agent."""
+        """Name of the orchestrator."""
         return self.blueprint.name
 
     def make_files_dirs(self) -> None:
-        """Make the files directory for the agent."""
+        """Make the files directory for the orchestrator."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
 
     def serialize(self) -> dict[str, Any]:
-        """Serialize the agent to a dict."""
+        """Serialize the orchestrator to a dict."""
         return asdict(self.blueprint)
 
     def save(self, update_blueprint: bool = True) -> None:
-        """Serialize the agent to YAML."""
+        """Serialize the orchestrator to YAML."""
         if update_blueprint:
             self.blueprint.rank = self.rank
         # assume that at the point of saving, all executors have been saved and so would have a rank
@@ -543,11 +548,12 @@ class Orchestrator:
         yaml.dump(self.serialize(), self.serialization_location)
 
     def accepts(self, task: Task) -> bool:
-        """Decides whether the agent accepts a task."""
+        """Decides whether the orchestrator accepts a task."""
         raise NotImplementedError
 
     async def execute(self, message: str | None = None) -> str:
-        """Execute the task. Adds a message to the task's event log if provided, and adds own message to the event log at the end of execution."""
+        """Execute the task. Adds a message (if provided) to the task's event log, and adds own message to the event log at the end of execution."""
+        breakpoint()
         raise NotImplementedError
 
     @classmethod
@@ -557,7 +563,7 @@ class Orchestrator:
         task: Task,
         files_parent_dir: Path,
     ) -> Self:
-        """Deserialize an Aranea agent from a YAML file."""
+        """Deserialize an Aranea orchestrator from a YAML file."""
         blueprint_data = yaml.load(blueprint_location)
         blueprint_data["task_history"] = tuple(blueprint_data["task_history"])
         return cls(
@@ -638,11 +644,11 @@ class Delegator:
     def search_blueprints(
         self,
         task: Task,
-        agent_files_dir: Path,
+        executor_files_dir: Path,
         rank_limit: int | None = None,
     ) -> list[BlueprintSearchResult]:
         """Search for blueprints of executors that can handle a task."""
-        if not os.listdir(agent_files_dir):
+        if not os.listdir(executor_files_dir):
             return []
 
         raise NotImplementedError
@@ -822,7 +828,6 @@ class Aranea:
         """Run the agent with a message, and a way to continue the conversation. Rerunning this method starts a new conversation."""
         if not self.executors_dir.exists():
             self.executors_dir.mkdir(parents=True, exist_ok=True)
-
         task = Task(
             description=TaskDescription(message),
             owner_id=self.id,
@@ -848,9 +853,8 @@ class Aranea:
         )
 
 
-# subagent choice must be ordered (chosen) by delegator (to be able to scale with llm intelligence)
-# ....
 # convert any mention of agent to executor
+# ....
 # > manager -> orchestrator
 # initial delegation: keep as dummy function for now
 # choose action
