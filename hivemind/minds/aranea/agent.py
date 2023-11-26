@@ -410,6 +410,7 @@ def generate_reasoning(role: Role, state: ExecutorState, printout: bool = False)
         In its default state, the orchestrator can perform the following actions:
         - IDENTIFY NEW SUBTASK: identify a new subtask from the MAIN TASK that is not yet on the existing subtask list. This adds the subtask to the list and gives it the NEW status.
         - START SUBTASK DISCUSSION: open a discussion thread with a subtask's executor, which allows you to exchange information about the subtask, and then optionally updating its status at the end of the discussion—starting, pausing, resuming, cancelling, etc.
+        - BEGIN SUBTASK EXECUTION: begin execution of a subtask, which will cause an executor to automatically be assigned to the subtask and the subtask's status to change to IN_PROGRESS.
         - DISCUSS WITH MAIN TASK OWNER: send a message to the task owner to gather or clarify information about the task.
         """
         request = """
@@ -517,7 +518,7 @@ class Orchestrator:
         """Template for the core state."""
         template = """
         ## MISSION:
-        You are an advanced task orchestrator that specializes in managing the execution of a main task and delegating its subtasks to EXECUTORS that can execute those tasks, while communicating with the TASK OWNER to gather required information for the task. Your overall purpose is to communicate with both the task owner and subtask executors to complete the main task as efficiently as possible.
+        You are an advanced task orchestrator that specializes in managing the execution of a MAIN TASK and delegating its SUBTASKS to EXECUTORS that can execute those tasks, while communicating with the MAIN TASK OWNER to gather required information for the task. Your overall purpose is to facilitate task execution by communicating with both the MAIN TASK OWNER and SUBTASK EXECUTORS to complete the MAIN TASK as efficiently as possible.
 
         ## KNOWLEDGE:
         In addition to the general background knowledge of your language model, you have the following, more specialized knowledge that may be relevant to the task at hand:
@@ -531,9 +532,9 @@ class Orchestrator:
         {task_specification}
         ```end_of_main_task_description
 
-        ## SUBTASK STATUSES:
-        - Subtasks are tasks that must be executed in order to complete the main task
-        - You do NOT execute subtasks yourself, but instead delegate them executors.
+        ## SUBTASKS:
+        - SUBTASKS are tasks that must be executed in order to complete the MAIN TASK.
+        - You do NOT execute subtasks yourself, but instead delegate them SUBTASK EXECUTORS.
         - Typically, tasks that are COMPLETED, CANCELLED, IN_PROGRESS, or IN_VALIDATION do not need attention unless you discover information that changes the status of the subtask.
         - In contrast, tasks that are NEW or BLOCKED will need action from you to start/continue execution.
         - This is not an exhaustive list of all required subtasks for the main task; you may discover additional subtasks that must be done to complete the main task.
@@ -563,7 +564,7 @@ class Orchestrator:
         ```end_of_delegated_subtasks
 
         ### SUBTASKS (NEW):
-        These subtasks are newly identified and not yet delegated to any executor:
+        These subtasks are newly identified and not yet begun.
         ```start_of_new_subtasks
         {new_subtasks}
         ```end_of_new_subtasks
@@ -668,9 +669,8 @@ class Orchestrator:
     def default_action_reasoning(self) -> str:
         """Prompt for choosing an action."""
 
-        # ....
-        # > add event log to meta prompt
         # sync terminology with core state template
+        # ....
         # need status summary for subtasks that reflects the current state of the task ("agent has a question", etc.; saves event)
 
         """action choice
