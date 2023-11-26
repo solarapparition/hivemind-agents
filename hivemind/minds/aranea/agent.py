@@ -63,6 +63,8 @@ class Role(Enum):
 class Reasoning:
     """Reasoning instructions for an agent."""
 
+    default_action_choice: str | None = None
+
 
 @dataclass
 class Blueprint:
@@ -441,10 +443,12 @@ def generate_reasoning(role: Role, state: ExecutorState, printout: bool = False)
                 messages=messages,
                 preamble=f"Generating reasoning for {role.value} in {state.value} state...",
                 color=Fore.MAGENTA,
+                printout=printout,
             )
         return query_model(
             model=super_creative_model,
             messages=messages,
+            printout=printout,
         )
     raise NotImplementedError
 
@@ -667,9 +671,19 @@ class Orchestrator:
 
     @property
     def default_action_reasoning(self) -> str:
-        """Prompt for choosing an action."""
+        """Prompt for choosing an action in the default state."""
+        if not self.blueprint.reasoning.default_action_choice:
+            self.blueprint.reasoning.default_action_choice = generate_reasoning(
+                self.role, ExecutorState.DEFAULT
+            )
+        return self.blueprint.reasoning.default_action_choice
 
-        """action choice
+        # ....
+        # > create basic autogen function call config
+        # > run reasoning
+        # convert action choice to actual function call
+
+        """
         {action_choice}
         # > output must be a Decision
         # > Decision must have justification
@@ -1181,6 +1195,8 @@ Ensure alignment with overall task objectives.
 class NullTestTaskOwner:
     """Test task owner."""
 
+    id = RuntimeId("test_task_owner")
+
     def answer_question(self, question: str) -> str:
         """Answer a question regarding the task."""
         return f"Answer to '{question}'"
@@ -1191,7 +1207,7 @@ null_test_task = Task(
     description=TaskDescription(
         information="Some information.", definition_of_done="Some definition of done."
     ),
-    owner_id=NullTestTaskOwner(),
+    owner_id=NullTestTaskOwner().id,
 )
 
 example_test_task = Task(
@@ -1206,7 +1222,7 @@ example_test_task = Task(
 # task: full flow of learning how to perform some skill from a tutorial
 # task: create an oai assistant agent using only documentation # need to set up virtual environment for it
 
-TEST_DIR = ".data/test/agents"
+TEST_DIR = Path(".data/test/agents")
 # test_blueprint = Blueprint(
 #     name="Test blueprint",
 #     rank=0,
@@ -1258,6 +1274,29 @@ def test_generate_reasoning() -> None:
     assert generate_reasoning(Role.ORCHESTRATOR, ExecutorState.DEFAULT, printout=True)
 
 
+def test_default_action_reasoning() -> None:
+    """Test default_action_reasoning()."""
+    orchestrator = Orchestrator(
+        blueprint=Blueprint(
+            name="Test blueprint",
+            role=Role.ORCHESTRATOR,
+            rank=0,
+            task_history=TaskHistory(),
+            reasoning=Reasoning(),
+            knowledge="Adaptations from past tasks.",
+            delegator=Delegator(
+                executors_dir=TEST_DIR,
+                bot_base_capabilities=[],
+                human_base_capabilities=[],
+            ),
+        ),
+        files_parent_dir=TEST_DIR,
+        task=null_test_task,
+    )
+    assert (output := orchestrator.default_action_reasoning)
+    print(output)
+
+
 async def test_full() -> None:
     """Run a full flow on an example task."""
     aranea = Aranea(Path(".data/test/aranea"))
@@ -1273,7 +1312,8 @@ def test() -> None:
     # test_id_generation()
     # test_full()
     # asyncio.run(test_full())
-    test_generate_reasoning()
+    # test_generate_reasoning()
+    test_default_action_reasoning()
 
 
 if __name__ == "__main__":
