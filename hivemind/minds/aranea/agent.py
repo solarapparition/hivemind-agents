@@ -23,7 +23,9 @@ from typing import (
     Coroutine,
 )
 
+import langchain
 from langchain.schema import SystemMessage, HumanMessage
+from langchain.cache import SQLiteCache
 from colorama import Fore
 
 from hivemind.toolkit.models import super_creative_model, query_model
@@ -445,46 +447,6 @@ def generate_reasoning(role: Role, state: ExecutorState, printout: bool = False)
     raise NotImplementedError
 
 
-# > need blocking reason for blocked subtasks
-# > agent must have at least >50% success rate to be a candidate
-# > sync terminology with core state template
-
-
-"""action choice
-{action_choice_reasoning} # attribute > reasoning step: think through what knowledge is relevant
-{action_choice}
-"extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
-# > when extracting subtasks, always provide a name
-"discuss", # doesn't send actual message yet, just brings up the context for sending message
-"""
-
-# > execute_task() must be async
-"""action execution
-{action_context}
-{action_execution_reasoning}
-{action_execution}
-
-"extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
-"discuss_with_agent",
-    # these are all options for individual discussion messages
-    "informational",
-    "start_subtask",
-    "pause_subtask",
-    "cancel_subtask",
-    "resume_subtask",
-"discuss_with_task_owner", # doesn't send actual message yet, just brings up the context for sending message
-    "task_completed",
-    "task_blocked",
-    "query",
-"""
-
-
-# > information discovery
-
-
-breakpoint()
-
-
 @dataclass
 class Orchestrator:
     """A recursively auto-specializing Aranea subagent."""
@@ -705,6 +667,10 @@ class Orchestrator:
     def default_action_reasoning(self) -> str:
         """Prompt for choosing an action."""
 
+        # > need status summary for subtasks that reflects the current state of the task ("agent has a question", etc.)
+        # ....
+        # > filter out executors that have more than 2 tasks and don't must have at least >50% success rate to be a candidate
+        # > sync terminology with core state template
         # ....
         # > output must be a Decision
         # > Decision must have justification
@@ -719,6 +685,33 @@ class Orchestrator:
         # > think through recent events: emergencies
         # > come out with a Decision
         # > new info from task owner
+
+        """action choice
+        {action_choice}
+        "extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
+        # > when extracting subtasks, always provide a name
+        "discuss", # doesn't send actual message yet, just brings up the context for sending message
+        """
+
+        # > execute_task() must be async
+        """action execution
+        {action_context}
+        {action_execution_reasoning}
+        {action_execution}
+
+        "extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
+        "discuss_with_agent",
+            # these are all options for individual discussion messages
+            "informational",
+            "start_subtask",
+            "pause_subtask",
+            "cancel_subtask",
+            "resume_subtask",
+        "discuss_with_task_owner", # doesn't send actual message yet, just brings up the context for sending message
+            "task_completed",
+            "task_blocked",
+            "query",
+    """
 
     async def execute(self, message: str | None = None) -> str:
         """Execute the task. Adds a message (if provided) to the task's event log, and adds own message to the event log at the end of execution."""
@@ -962,6 +955,15 @@ def default_human_base_capabilities() -> list["BaseCapability"]:
     return []
 
 
+def configure_llm_cache(cache_dir: Path) -> None:
+    """Configure the LLM cache."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    if not langchain.llm_cache:
+        langchain.llm_cache = SQLiteCache(
+            database_path=str(cache_dir / ".langchain.db")
+        )
+
+
 @dataclass
 class Aranea:
     """Main interfacing class for the agent."""
@@ -976,6 +978,15 @@ class Aranea:
         default_factory=default_human_base_capabilities
     )
     """Base human capabilities that the agent can fall back to."""
+
+    def __post_init__(self) -> None:
+        """Post-initialization hook."""
+        configure_llm_cache(self.cache_dir)
+
+    @property
+    def cache_dir(self) -> Path:
+        """Directory for the LLM cache."""
+        return self.files_dir / ".cache"
 
     @property
     def executors_dir(self):
