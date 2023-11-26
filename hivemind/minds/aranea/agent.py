@@ -23,6 +23,10 @@ from typing import (
     Coroutine,
 )
 
+from langchain.schema import SystemMessage, HumanMessage
+from colorama import Fore
+
+from hivemind.toolkit.models import super_creative_model, query_model
 from hivemind.toolkit.text_formatting import dedent_and_strip
 from hivemind.toolkit.yaml_tools import yaml
 from hivemind.toolkit.types import HivemindReply
@@ -244,6 +248,12 @@ class Executor(Protocol):
         raise NotImplementedError
 
 
+class ExecutorState(Enum):
+    """State of an executor."""
+
+    DEFAULT_INITIAL = "default_initial"
+
+
 @dataclass
 class Task:
     """Holds information about a task."""
@@ -365,65 +375,79 @@ class CoreState:
         )
 
 
+def generate_reasoning(role: Role, state: ExecutorState, printout: bool = False) -> str:
+    """Generate reasoning for choosing an action."""
+    if role == Role.ORCHESTRATOR and state == ExecutorState.DEFAULT_INITIAL:
+        system = """
+        ## MISSION:
+        You are the instructor for an AI task orchestration agent. Your purpose to provide step-by-step guidance for the agent to think through what it must do next.
 
+        ## CONCEPTS:
+        The following are some concepts that is relevant to your role as an instructor:
+        - ORCHESTRATOR: the agent that is responsible for managing the execution of a main task and managing the statuses of its subtasks, while communicating with the task's owner to gather required information for the task. The orchestrator must communicate with both the task owner and subtask executors to complete the main task as efficiently as possible.
+        - MAIN TASK: the main task that the orchestrator is responsible for managing, which it does by identifying subtasks and providing support for specialized executor agents for the subtasks.
+        - SUBTASK: a task that must be executed in order to complete the main task. The orchestrator does NOT execute subtasks itself; instead, it facilitates the resolution of subtasks by making high-level decisions regarding each subtask in the context of the overall task and providing support for the subtask executors.
+        - SUBTASK STATUS: the status of each subtask. The status of a subtask can be one of the following:
+        - NEW: the subtask has been newly created via the CREATE NEW SUBTASK action and not yet delegated to any executor.
+        - BLOCKED: the subtask is blocked by some issue, and execution cannot continue until the issue is resolved, typically by discussing the blocker and/or creating a new subtask to resolve the blocker.
+        - IN_PROGRESS: the subtask is currently being executed by a subtask executor.
+        - IN_VALIDATION: the subtask has been reported as completed by its executor, but is still being validated by a validator. Validation happens automatically and does not require or action from the orchestrator.
+        - COMPLETED: the subtask has been validated as complete by a validator.
+        - CANCELLED: the subtask has been cancelled for various reason and will not be done.
+        - SUBTASK EXECUTOR: an agent that is responsible for executing a subtask. Subtask executors specialize in executing certain types of tasks; the orchestrator chooses the subtask executor for each subtask from a pool of such executors.
+        - MAIN TASK OWNER: the one who requested the main task to be done. The orchestrator must communicate with the task owner to gather background information required to complete the main task.
 
+        ## ORCHESTRATOR INFORMATION SECTIONS:
+        By default, the orchestrator has access to the following:
+        - KNOWLEDGE: background knowledge relating to the orchestrator's area of specialization. The information may or may not be relevant to the specific main task, but is provided as support for the orchestrator's decisionmaking.
+        - MAIN TASK DESCRIPTION: a description of all information about the main task that the orchestrator has learned so far from the task owner. This may NOT be a complete description of the main task, so the orchestrator must always take into account if there is enough information for performing its actions.
+        - SUBTASKS: a list of all subtasks that have been extracted by the orchestrator so far; for each one, there is a high-level description of what must be done, as well as the subtask's status. This is not an exhaustive list of all required subtasks for the main task; there may be additional subtasks that are required.
 
+        ## ORCHESTRATOR ACTIONS:
+        In its default state, the orchestrator can perform the following actions:
+        - IDENTIFY NEW SUBTASK: identify a new subtask from the MAIN TASK that is not yet on the existing subtask list. This adds the subtask to the list and gives it the NEW status.
+        - EXPAND SUBTASK: expand the information for a subtask for further subtask-specific actions, such as starting, pausing, resuming, cancelling, or discussing with the subtask executor. These actions would only be available after opening the subtask—the orchestrator cannot perform them directly in its normal state.
+        - DISCUSS WITH MAIN TASK OWNER: send a message to the task owner to gather or clarify information about the task.
+        """
+        request = """
+        ## REQUEST FOR YOU:
+        Please provide a step-by-step, robust reasoning process for the orchestrator to sequentially think through the information it has access to so that it has the appropriate mental context for deciding what to do next. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind. Some things to note:
+        - The final action that the orchestrator decides on MUST be one of the ORCHESTRATOR ACTIONS described above. The orchestrator cannot perform any other actions.
+        - Assume that the orchestrator has access to the information described above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3.
+        - The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use capitalized letters when referring to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section").
+        - Typically, tasks that are COMPLETED, CANCELLED, IN_PROGRESS, or IN_VALIDATION do not need immediate attention unless the orchestrator discovers information that changes the status of the subtask. Tasks that are NEW or BLOCKED will need action from the orchestrator to start or resume execution respectively.
+        - The reasoning process should be written in second person and be no more than about a half dozen steps.
+        - The reasoning steps can refer to the results of previous steps, and it may be effective to build up the orchestrator's mental context step by step, starting from basic information available, similar to writing a procedural script for a program but in natural language instead of code.
 
-prompt = """
-## MISSION:
-You are the instructor for an AI task orchestration agent. Your purpose to provide step-by-step guidance for the agent to think through what it must do next.
+        Please provide the reasoning process in the following format:
+        ```start_of_reasoning_process
+        1. {reasoning step 1}
+        2. {reasoning step 2}
+        3. [... etc.]
+        ```end_of_reasoning_process
+        Feel free to add comments or thoughts before or after the reasoning process, but the reasoning process block itself must only contain the reasoning steps, directed at the orchestrator.
+        """
+        messages = [
+            SystemMessage(content=dedent_and_strip(system)),
+            HumanMessage(content=dedent_and_strip(request)),
+        ]
+        if printout:
+            return query_model(
+                model=super_creative_model,
+                messages=messages,
+                preamble=f"Generating reasoning for {role.value} in {state.value} state...",
+                color=Fore.MAGENTA,
+            )
+        return query_model(
+            model=super_creative_model,
+            messages=messages,
+        )
+    raise NotImplementedError
 
-## CONCEPTS:
-The following are some concepts that is relevant to your role as an instructor:
-- ORCHESTRATOR: the agent that is responsible for managing the execution of a main task and managing the statuses of its subtasks, while communicating with the task's owner to gather required information for the task. The orchestrator must communicate with both the task owner and subtask executors to complete the main task as efficiently as possible.
-- MAIN TASK: the main task that the orchestrator is responsible for managing, which it does by identifying subtasks and providing support for specialized executor agents for the subtasks.
-- SUBTASK: a task that must be executed in order to complete the main task. The orchestrator does NOT execute subtasks itself; instead, it facilitates the resolution of subtasks by making high-level decisions regarding each subtask in the context of the overall task and providing support for the subtask executors.
-- SUBTASK STATUS: the status of each subtask. The status of a subtask can be one of the following:
-  - NEW: the subtask has been newly created via the CREATE NEW SUBTASK action and not yet delegated to any executor.
-  - BLOCKED: the subtask is blocked by some issue, and execution cannot continue until the issue is resolved, typically by discussing the blocker and/or creating a new subtask to resolve the blocker.
-  - IN_PROGRESS: the subtask is currently being executed by a subtask executor.
-  - IN_VALIDATION: the subtask has been reported as completed by its executor, but is still being validated by a validator. Validation happens automatically and does not require or action from the orchestrator.
-  - COMPLETED: the subtask has been validated as complete by a validator.
-  - CANCELLED: the subtask has been cancelled for various reason and will not be done.
-- SUBTASK EXECUTOR: an agent that is responsible for executing a subtask. Subtask executors specialize in executing certain types of tasks; the orchestrator chooses the subtask executor for each subtask from a pool of such executors.
-- MAIN TASK OWNER: the one who requested the main task to be done. The orchestrator must communicate with the task owner to gather background information required to complete the main task.
-
-## ORCHESTRATOR INFORMATION SECTIONS:
-By default, the orchestrator has access to the following:
-- KNOWLEDGE: background knowledge relating to the orchestrator's area of specialization. The information may or may not be relevant to the specific main task, but is provided as support for the orchestrator's decisionmaking.
-- MAIN TASK DESCRIPTION: a description of all information about the main task that the orchestrator has learned so far from the task owner. This may NOT be a complete description of the main task, so the orchestrator must always take into account if there is enough information for performing its actions.
-- SUBTASKS: a list of all subtasks that have been extracted by the orchestrator so far; for each one, there is a high-level description of what must be done, as well as the subtask's status. This is not an exhaustive list of all required subtasks for the main task; there may be additional subtasks that are required.
-
-## ORCHESTRATOR ACTIONS:
-In its default state, the orchestrator can perform the following actions:
-- IDENTIFY NEW SUBTASK: identify a new subtask from the MAIN TASK that is not yet on the existing subtask list. This adds the subtask to the list and gives it the NEW status.
-- EXPAND SUBTASK: expand the information for a subtask for further subtask-specific actions, such as starting, pausing, resuming, cancelling, or discussing with the subtask executor. These actions would only be available after opening the subtask—the orchestrator cannot perform them directly in its normal state.
-- DISCUSS WITH MAIN TASK OWNER: send a message to the task owner to gather or clarify information about the task.
-
-## REQUEST FOR YOU:
-Please provide a step-by-step, robust reasoning process for the orchestrator to sequentially think through the information it has access to so that it has the appropriate mental context for deciding what to do next. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind. Some things to note:
-- The final action that the orchestrator decides on MUST be one of the ORCHESTRATOR ACTIONS described above. The orchestrator cannot perform any other actions.
-- Assume that the orchestrator has access to the information described above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3.
-- The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use capitalized letters when referring to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section").
-- Typically, tasks that are COMPLETED, CANCELLED, IN_PROGRESS, or IN_VALIDATION do not need immediate attention unless the orchestrator discovers information that changes the status of the subtask. Tasks that are NEW or BLOCKED will need action from the orchestrator to start or resume execution respectively.
-- The reasoning process should be written in second person and be no more than about a half dozen steps.
-- The reasoning steps can refer to the results of previous steps, and it may be effective to build up the orchestrator's mental context step by step, starting from basic information available, similar to writing a procedural script for a program but in natural language instead of code.
-
-Please provide the reasoning process in the following format:
-```start_of_reasoning_process
-1. {reasoning step 1}
-2. {reasoning step 2}
-3. [... etc.]
-```end_of_reasoning_process
-Feel free to add comments or thoughts before or after the reasoning process, but the reasoning process block itself must only contain the reasoning steps, directed at the orchestrator.
-"""
 
 # > need blocking reason for blocked subtasks
 # > agent must have at least >50% success rate to be a candidate
 # > sync terminology with core state template
-
-
-
 
 
 """action choice
@@ -455,16 +479,11 @@ Feel free to add comments or thoughts before or after the reasoning process, but
 """
 
 
-
 # > information discovery
 
 
-
-
-
-
-
 breakpoint()
+
 
 @dataclass
 class Orchestrator:
@@ -686,10 +705,6 @@ class Orchestrator:
     def default_action_reasoning(self) -> str:
         """Prompt for choosing an action."""
 
-
-
-
-
         # ....
         # > output must be a Decision
         # > Decision must have justification
@@ -704,7 +719,6 @@ class Orchestrator:
         # > think through recent events: emergencies
         # > come out with a Decision
         # > new info from task owner
-
 
     async def execute(self, message: str | None = None) -> str:
         """Execute the task. Adds a message (if provided) to the task's event log, and adds own message to the event log at the end of execution."""
@@ -1242,6 +1256,14 @@ def test_id_generation() -> None:
     ), f"{len(blueprint_id)} {len(task_id)}"
 
 
+def test_generate_reasoning() -> None:
+    """Test generate_reasoning()."""
+    print(
+        result := generate_reasoning(Role.ORCHESTRATOR, ExecutorState.DEFAULT_INITIAL)
+    )
+    assert result
+
+
 async def test_full() -> None:
     """Run a full flow on an example task."""
     aranea = Aranea(Path(".data/test/aranea"))
@@ -1255,7 +1277,7 @@ def test() -> None:
     # test_deserialize()
     # test_id_generation()
     # test_full()
-    asyncio.run(test_full())
+    # asyncio.run(test_full())
 
 
 if __name__ == "__main__":
