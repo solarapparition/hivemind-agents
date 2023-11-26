@@ -253,7 +253,7 @@ class Executor(Protocol):
 class ExecutorState(Enum):
     """State of an executor."""
 
-    DEFAULT_INITIAL = "default_initial"
+    DEFAULT = "default"
 
 
 @dataclass
@@ -379,7 +379,7 @@ class CoreState:
 
 def generate_reasoning(role: Role, state: ExecutorState, printout: bool = False) -> str:
     """Generate reasoning for choosing an action."""
-    if role == Role.ORCHESTRATOR and state == ExecutorState.DEFAULT_INITIAL:
+    if role == Role.ORCHESTRATOR and state == ExecutorState.DEFAULT:
         system = """
         ## MISSION:
         You are the instructor for an AI task orchestration agent. Your purpose to provide step-by-step guidance for the agent to think through what it must do next.
@@ -667,27 +667,16 @@ class Orchestrator:
     def default_action_reasoning(self) -> str:
         """Prompt for choosing an action."""
 
-        # > need status summary for subtasks that reflects the current state of the task ("agent has a question", etc.)
         # ....
-        # > filter out executors that have more than 2 tasks and don't must have at least >50% success rate to be a candidate
-        # > sync terminology with core state template
-        # ....
-        # > output must be a Decision
-        # > Decision must have justification
-        # > goal is to determine what to do next
-        # > think through unknown info
-        # > decide whether there's enough info to begin extraction
-        # case: there are no subtasks in progress
-        # ....
-        # > option: focus on certain subtask
-        # > option: ask_about_main_task
-        # > option: extract subtask
-        # > think through recent events: emergencies
-        # > come out with a Decision
-        # > new info from task owner
+        # "focus" on certain subtask
+        # > add event log to meta prompt
+        # sync terminology with core state template
+        # need status summary for subtasks that reflects the current state of the task ("agent has a question", etc.; saves event)
 
         """action choice
         {action_choice}
+        # > output must be a Decision
+        # > Decision must have justification
         "extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
         # > when extracting subtasks, always provide a name
         "discuss", # doesn't send actual message yet, just brings up the context for sending message
@@ -825,6 +814,7 @@ class Delegator:
         # > rank of none can access all agents
         # > use strategy from self
         # > remember to rerank
+        # > filter out executors that have more than 2 tasks and don't must have at least >50% success rate to be a candidate
 
     def evaluate(
         self,
@@ -1270,7 +1260,7 @@ def test_id_generation() -> None:
 def test_generate_reasoning() -> None:
     """Test generate_reasoning()."""
     print(
-        result := generate_reasoning(Role.ORCHESTRATOR, ExecutorState.DEFAULT_INITIAL)
+        result := generate_reasoning(Role.ORCHESTRATOR, ExecutorState.DEFAULT)
     )
     assert result
 
