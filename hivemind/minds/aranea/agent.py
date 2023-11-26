@@ -89,12 +89,12 @@ class TaskWorkStatus(Enum):
     IN_VALIDATION = "in validation"
 
 
-class TaskDiscussionStatus(Enum):
+class TaskEventStatus(Enum):
     """Status of a discussion."""
 
     NONE = "none"
-    AWAITING_RESPONSE_FROM_AGENT = "awaiting response from agent"
-    AWAITING_RESPONSE_FROM_YOU = "awaiting response from you"
+    AWAITING_AGENT = "you are awaiting response from the subtask executor"
+    AWAITING_YOU = "the subtask executor is awaiting a response from you"
 
 
 def replace_agent_id(
@@ -268,7 +268,7 @@ class Task:
     executor: Executor | None = None
     notes: dict[str, str] = field(default_factory=dict)
     work_status: TaskWorkStatus = TaskWorkStatus.NEW
-    discussion_status: TaskDiscussionStatus = TaskDiscussionStatus.NONE
+    event_status: TaskEventStatus = TaskEventStatus.NONE
 
     @cached_property
     def event_log(self) -> EventLog:
@@ -291,7 +291,7 @@ class Task:
         Id: {id}
         Owner: {owner}
         Work Status: {status}
-        Discussion Status: {discussion_status}
+        Event Status: {event_status}
 
         {description}
         """
@@ -299,7 +299,7 @@ class Task:
             id=self.id,
             owner=self.owner_id,
             status=self.work_status,
-            discussion_status=self.discussion_status,
+            event_status=self.event_status,
             description=self.description,
         )
 
@@ -328,13 +328,13 @@ class Task:
         Id: {id}
         Name: {name}
         Work Status: {status}
-        Discussion Status: {discussion_status}
+        Event Status: {event_status}
         """
         return dedent_and_strip(template).format(
             id=self.id,
             name=self.name,
-            status=self.work_status,
-            discussion_status=self.discussion_status,
+            work_status=self.work_status,
+            event_status=self.event_status,
         )
 
 
@@ -668,10 +668,6 @@ class Orchestrator:
     @property
     def default_action_reasoning(self) -> str:
         """Prompt for choosing an action."""
-
-        # sync terminology with core state template
-        # ....
-        # need status summary for subtasks that reflects the current state of the task ("agent has a question", etc.; saves event)
 
         """action choice
         {action_choice}
