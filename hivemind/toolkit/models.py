@@ -1,6 +1,8 @@
 """Model utilities."""
 
 from typing import Sequence
+from colorama import Fore
+
 from langchain.schema import BaseMessage
 from langchain.chat_models.base import BaseChatModel
 from langchain.chat_models import ChatOpenAI, ChatAnthropic
@@ -17,7 +19,8 @@ super_broad_model = ChatAnthropic(temperature=0, model="claude-instant-1", max_t
 def query_model(
     model: BaseChatModel,
     messages: Sequence[BaseMessage],
-    color: int = 0,
+    color: str = Fore.RESET,
+    # color: int = 0,
     preamble: str | None = None,
     printout: bool = True,
 ) -> str:
@@ -26,5 +29,6 @@ def query_model(
         print(f"\033[1;34m{preamble}\033[0m")
     result = model(list(messages)).content
     if printout:
-        print(f"\033[{color}m{result}\033[0m")
+        print(f"{color}{result}{Fore.RESET}")
+        # print(f"\033[{color}m{result}\033[0m")
     return result
