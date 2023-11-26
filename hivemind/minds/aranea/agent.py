@@ -390,13 +390,13 @@ def generate_reasoning(role: Role, state: ExecutorState, printout: bool = False)
         - MAIN TASK: the main task that the orchestrator is responsible for managing, which it does by identifying subtasks and providing support for specialized executor agents for the subtasks.
         - SUBTASK: a task that must be executed in order to complete the main task. The orchestrator does NOT execute subtasks itself; instead, it facilitates the resolution of subtasks by making high-level decisions regarding each subtask in the context of the overall task and providing support for the subtask executors.
         - SUBTASK STATUS: the status of each subtask. The status of a subtask can be one of the following:
-        - NEW: the subtask has been newly created via the CREATE NEW SUBTASK action and not yet delegated to any executor.
-        - BLOCKED: the subtask is blocked by some issue, and execution cannot continue until the issue is resolved, typically by discussing the blocker and/or creating a new subtask to resolve the blocker.
-        - IN_PROGRESS: the subtask is currently being executed by a subtask executor.
-        - IN_VALIDATION: the subtask has been reported as completed by its executor, but is still being validated by a validator. Validation happens automatically and does not require or action from the orchestrator.
-        - COMPLETED: the subtask has been validated as complete by a validator.
-        - CANCELLED: the subtask has been cancelled for various reason and will not be done.
-        - SUBTASK EXECUTOR: an agent that is responsible for executing a subtask. Subtask executors specialize in executing certain types of tasks; the orchestrator chooses the subtask executor for each subtask from a pool of such executors.
+            - NEW: the subtask has been newly created via the CREATE NEW SUBTASK action and not yet delegated to any executor.
+            - BLOCKED: the subtask is blocked by some issue, and execution cannot continue until the issue is resolved, typically by discussing the blocker and/or creating a new subtask to resolve the blocker.
+            - IN_PROGRESS: the subtask is currently being executed by a subtask executor.
+            - IN_VALIDATION: the subtask has been reported as completed by its executor, but is still being validated by a validator. Validation happens automatically and does not require or action from the orchestrator.
+            - COMPLETED: the subtask has been validated as complete by a validator.
+            - CANCELLED: the subtask has been cancelled for various reason and will not be done.
+        - SUBTASK EXECUTOR: an agent that is responsible for executing a subtask. Subtask executors specialize in executing certain types of tasks; whenever a subtask begins execution, an executor is automatically assigned to it, which the orchestrator can then communicate with.
         - MAIN TASK OWNER: the one who requested the main task to be done. The orchestrator must communicate with the task owner to gather background information required to complete the main task.
 
         ## ORCHESTRATOR INFORMATION SECTIONS:
@@ -404,11 +404,12 @@ def generate_reasoning(role: Role, state: ExecutorState, printout: bool = False)
         - KNOWLEDGE: background knowledge relating to the orchestrator's area of specialization. The information may or may not be relevant to the specific main task, but is provided as support for the orchestrator's decisionmaking.
         - MAIN TASK DESCRIPTION: a description of all information about the main task that the orchestrator has learned so far from the task owner. This may NOT be a complete description of the main task, so the orchestrator must always take into account if there is enough information for performing its actions.
         - SUBTASKS: a list of all subtasks that have been extracted by the orchestrator so far; for each one, there is a high-level description of what must be done, as well as the subtask's status. This is not an exhaustive list of all required subtasks for the main task; there may be additional subtasks that are required.
+        - RECENT EVENTS LOG: a log of recent events that have occurred during the execution of the task. This can include status updates for subtasks, messages from the task owner, and the orchestrator's own previous thoughts/decisions
 
         ## ORCHESTRATOR ACTIONS:
         In its default state, the orchestrator can perform the following actions:
         - IDENTIFY NEW SUBTASK: identify a new subtask from the MAIN TASK that is not yet on the existing subtask list. This adds the subtask to the list and gives it the NEW status.
-        - EXPAND SUBTASK: expand the information for a subtask for further subtask-specific actions, such as starting, pausing, resuming, cancelling, or discussing with the subtask executor. These actions would only be available after opening the subtask—the orchestrator cannot perform them directly in its normal state.
+        - START SUBTASK DISCUSSION: open a discussion thread with a subtask's executor, which allows you to exchange information about the subtask, and then optionally updating its status at the end of the discussion—starting, pausing, resuming, cancelling, etc.
         - DISCUSS WITH MAIN TASK OWNER: send a message to the task owner to gather or clarify information about the task.
         """
         request = """
@@ -668,7 +669,6 @@ class Orchestrator:
         """Prompt for choosing an action."""
 
         # ....
-        # "focus" on certain subtask
         # > add event log to meta prompt
         # sync terminology with core state template
         # need status summary for subtasks that reflects the current state of the task ("agent has a question", etc.; saves event)
@@ -1259,10 +1259,7 @@ def test_id_generation() -> None:
 
 def test_generate_reasoning() -> None:
     """Test generate_reasoning()."""
-    print(
-        result := generate_reasoning(Role.ORCHESTRATOR, ExecutorState.DEFAULT)
-    )
-    assert result
+    assert generate_reasoning(Role.ORCHESTRATOR, ExecutorState.DEFAULT, printout=True)
 
 
 async def test_full() -> None:
@@ -1274,11 +1271,13 @@ async def test_full() -> None:
 
 def test() -> None:
     """Run tests."""
+    configure_llm_cache(Path(".cache"))
     # test_serialize()
     # test_deserialize()
     # test_id_generation()
     # test_full()
     # asyncio.run(test_full())
+    test_generate_reasoning()
 
 
 if __name__ == "__main__":
