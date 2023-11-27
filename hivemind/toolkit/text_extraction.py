@@ -3,6 +3,10 @@
 import re
 
 
+class ExtractionError(Exception):
+    """Raised when an extraction fails."""
+
+
 def extract_block(text: str, block_type: str) -> str | None:
     """Extract a code block from the text."""
     pattern = (
