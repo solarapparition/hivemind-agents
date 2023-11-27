@@ -24,11 +24,12 @@ from typing import (
 )
 
 import langchain
-from langchain.schema import SystemMessage, HumanMessage
+from langchain.schema import SystemMessage
 from langchain.cache import SQLiteCache
 from colorama import Fore
 
-from hivemind.toolkit.models import super_creative_model, query_model
+from hivemind.toolkit.models import super_creative_model, precise_model, query_model
+from hivemind.toolkit.text_extraction import ExtractionError, extract_blocks
 from hivemind.toolkit.text_formatting import dedent_and_strip
 from hivemind.toolkit.yaml_tools import yaml
 from hivemind.toolkit.types import HivemindReply
@@ -38,6 +39,9 @@ TaskId = NewType("TaskId", str)
 RuntimeId = NewType("RuntimeId", str)
 TaskHistory = list[TaskId]
 IdTypeT = TypeVar("IdTypeT", BlueprintId, TaskId)
+
+AGENT_COLOR = Fore.MAGENTA
+VERBOSE = True
 
 
 def generate_aranea_id(id_type: type[IdTypeT]) -> IdTypeT:
@@ -81,18 +85,18 @@ class Blueprint:
 
 
 class TaskWorkStatus(Enum):
-    """Status of a task."""
+    """Status of the work for a task."""
 
-    NEW = "new"
-    DELEGATED = "delegated"
-    COMPLETED = "completed"
-    CANCELLED = "cancelled"
-    BLOCKED = "blocked"
-    IN_VALIDATION = "in validation"
+    NEW = "NEW"
+    DELEGATED = "DELEGATED"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+    BLOCKED = "BLOCKED"
+    IN_VALIDATION = "IN_VALIDATION"
 
 
 class TaskEventStatus(Enum):
-    """Status of a discussion."""
+    """Status of the events for a task."""
 
     NONE = "none"
     AWAITING_AGENT = "you are awaiting response from the subtask executor"
@@ -289,21 +293,22 @@ class Task:
     @property
     def main_status_printout(self) -> str:
         """String representation of the task as it would appear as a main task."""
-        template = """
-        Id: {id}
-        Owner: {owner}
-        Work Status: {status}
-        Event Status: {event_status}
+        # Id: {id}
+        # Owner: {owner}
+        # Work Status: {status}
+        # Event Status: {event_status}
 
-        {description}
-        """
-        return dedent_and_strip(template).format(
-            id=self.id,
-            owner=self.owner_id,
-            status=self.work_status,
-            event_status=self.event_status,
-            description=self.description,
-        )
+        # template = """
+        # {description}
+        # """
+        # return dedent_and_strip(template).format(
+        # id=self.id,
+        # owner=self.owner_id,
+        # status=self.work_status.value,
+        # event_status=self.event_status.value,
+        # description=self.description,
+        # )
+        return str(self.description)
 
     def __str__(self) -> str:
         """String representation of task status."""
@@ -379,7 +384,9 @@ class CoreState:
         )
 
 
-def generate_reasoning(role: Role, state: ExecutorState, printout: bool = False) -> str:
+def generate_reasoning(
+    role: Role, state: ExecutorState, actions: str, printout: bool = False
+) -> str:
     """Generate reasoning for choosing an action."""
     if role == Role.ORCHESTRATOR and state == ExecutorState.DEFAULT:
         system = """
@@ -392,7 +399,7 @@ def generate_reasoning(role: Role, state: ExecutorState, printout: bool = False)
         - MAIN TASK: the main task that the orchestrator is responsible for managing, which it does by identifying subtasks and providing support for specialized executor agents for the subtasks.
         - SUBTASK: a task that must be executed in order to complete the main task. The orchestrator does NOT execute subtasks itself; instead, it facilitates the resolution of subtasks by making high-level decisions regarding each subtask in the context of the overall task and providing support for the subtask executors.
         - SUBTASK STATUS: the status of each subtask. The status of a subtask can be one of the following:
-            - NEW: the subtask has been newly created via the CREATE NEW SUBTASK action and not yet delegated to any executor.
+            - NEW: the subtask has been newly created via the CREATE NEW SUBTASK action and has not been started yet.
             - BLOCKED: the subtask is blocked by some issue, and execution cannot continue until the issue is resolved, typically by discussing the blocker and/or creating a new subtask to resolve the blocker.
             - IN_PROGRESS: the subtask is currently being executed by a subtask executor.
             - IN_VALIDATION: the subtask has been reported as completed by its executor, but is still being validated by a validator. Validation happens automatically and does not require or action from the orchestrator.
@@ -410,14 +417,11 @@ def generate_reasoning(role: Role, state: ExecutorState, printout: bool = False)
 
         ## ORCHESTRATOR ACTIONS:
         In its default state, the orchestrator can perform the following actions:
-        - IDENTIFY NEW SUBTASK: identify a new subtask from the MAIN TASK that is not yet on the existing subtask list. This adds the subtask to the list and gives it the NEW status.
-        - START SUBTASK DISCUSSION: open a discussion thread with a subtask's executor, which allows you to exchange information about the subtask, and then optionally updating its status at the end of the discussion—starting, pausing, resuming, cancelling, etc.
-        - BEGIN SUBTASK EXECUTION: begin execution of a subtask, which will cause an executor to automatically be assigned to the subtask and the subtask's status to change to IN_PROGRESS.
-        - DISCUSS WITH MAIN TASK OWNER: send a message to the task owner to gather or clarify information about the task.
+        {actions}
         """
         request = """
         ## REQUEST FOR YOU:
-        Please provide a step-by-step, robust reasoning process for the orchestrator to sequentially think through the information it has access to so that it has the appropriate mental context for deciding what to do next. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind. Some things to note:
+        Provide a step-by-step, robust reasoning process for the orchestrator to sequentially think through the information it has access to so that it has the appropriate mental context for deciding what to do next. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind. Some things to note:
         - The final action that the orchestrator decides on MUST be one of the ORCHESTRATOR ACTIONS described above. The orchestrator cannot perform any other actions.
         - Assume that the orchestrator has access to the information described above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3.
         - The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use capitalized letters when referring to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section").
@@ -425,32 +429,53 @@ def generate_reasoning(role: Role, state: ExecutorState, printout: bool = False)
         - The reasoning process should be written in second person and be no more than about a half dozen steps.
         - The reasoning steps can refer to the results of previous steps, and it may be effective to build up the orchestrator's mental context step by step, starting from basic information available, similar to writing a procedural script for a program but in natural language instead of code.
 
-        Please provide the reasoning process in the following format:
+        Provide the reasoning process in the following format:
         ```start_of_reasoning_process
         1. {reasoning step 1}
         2. {reasoning step 2}
         3. [... etc.]
         ```end_of_reasoning_process
-        Feel free to add comments or thoughts before or after the reasoning process, but the reasoning process block itself must only contain the reasoning steps, directed at the orchestrator.
+        You may add comments or thoughts before or after the reasoning process, but the reasoning process block itself must only contain the reasoning steps, directed at the orchestrator.
         """
         messages = [
-            SystemMessage(content=dedent_and_strip(system)),
-            HumanMessage(content=dedent_and_strip(request)),
+            SystemMessage(content=dedent_and_strip(system).format(actions=actions)),
+            SystemMessage(content=dedent_and_strip(request)),
         ]
         if printout:
-            return query_model(
+            result = query_model(
                 model=super_creative_model,
                 messages=messages,
                 preamble=f"Generating reasoning for {role.value} in {state.value} state...",
-                color=Fore.MAGENTA,
+                color=AGENT_COLOR,
                 printout=printout,
             )
-        return query_model(
-            model=super_creative_model,
-            messages=messages,
-            printout=printout,
-        )
+        else:
+            result = query_model(
+                model=super_creative_model,
+                messages=messages,
+                printout=printout,
+            )
+        if not (
+            extracted_result := extract_blocks(result, "start_of_reasoning_process")
+        ):
+            raise ExtractionError(
+                "Could not extract reasoning process from the result."
+            )
+        return extracted_result[0]
     raise NotImplementedError
+
+
+@dataclass
+class ActionDecision:
+    """Decision for an action."""
+
+    action_choice: str
+    justifications: str
+
+    @classmethod
+    def from_yaml_str(cls, yaml_str: str) -> Self:
+        """Create an action decision from a YAML string."""
+        return cls(**yaml.load(yaml_str))
 
 
 @dataclass
@@ -538,7 +563,7 @@ class Orchestrator:
 
         ## SUBTASKS:
         - SUBTASKS are tasks that must be executed in order to complete the MAIN TASK.
-        - You do NOT execute subtasks yourself, but instead delegate them SUBTASK EXECUTORS.
+        - You do NOT execute subtasks yourself, but instead delegate them to SUBTASK EXECUTORS.
         - Typically, tasks that are COMPLETED, CANCELLED, IN_PROGRESS, or IN_VALIDATION do not need attention unless you discover information that changes the status of the subtask.
         - In contrast, tasks that are NEW or BLOCKED will need action from you to start/continue execution.
         - This is not an exhaustive list of all required subtasks for the main task; you may discover additional subtasks that must be done to complete the main task.
@@ -670,23 +695,93 @@ class Orchestrator:
         )
 
     @property
+    def default_actions(self) -> str:
+        """Actions available in the default state."""
+        actions = """
+        - `IDENTIFY_NEW_SUBTASK`: identify a new subtask from the MAIN TASK that is not yet on the existing subtask list. This adds the subtask to the list, assigns it an executor, and gives it the NEW status.
+        - `START_DISCUSSION_FOR_SUBTASK: "{id}"`: open a discussion thread with a subtask's executor, which allows you to exchange information about the subtask, and then optionally updating its status at the end of the discussion—starting, pausing, resuming, cancelling, etc. {id} must be replaced with the id of the subtask to be discussed.
+        - `MESSAGE_TASK_OWNER: "{message}"`: send a message to the task owner to gather or clarify information about the task. {message} must be replaced with the message you want to send.
+        """
+        return dedent_and_strip(actions)
+
+    @property
     def default_action_reasoning(self) -> str:
         """Prompt for choosing an action in the default state."""
         if not self.blueprint.reasoning.default_action_choice:
             self.blueprint.reasoning.default_action_choice = generate_reasoning(
-                self.role, ExecutorState.DEFAULT
+                self.role, ExecutorState.DEFAULT, self.default_actions, printout=VERBOSE
             )
-        return self.blueprint.reasoning.default_action_choice
+        action_choice_core = self.blueprint.reasoning.default_action_choice
+        template = """
+        Use the following reasoning process to decide what to do next:
+        ```start_of_reasoning_steps
+        {action_choice_core}
+        ```end_of_reasoning_steps
+
+        In your reply, you must include output from all steps of the reasoning process, in this block format:
+        ```start_of_action_reasoning_output
+        1. {{step_1_output}}
+        2. {{step_2_output}}
+        3. [... etc.]
+        ```end_of_action_reasoning_output
+        After this block, you must include the action you have decided on, in this format:
+        ```start_of_action_choice_output
+        justifications: |-
+          {{justifications}}
+        action_choice: |-
+          {{action_choice}} # must be one of the actions listed above, in the same format
+        ```end_of_action_choice_output
+        Any additional comments or thoughts can be added before or after the output blocks.
+        """
+        return dedent_and_strip(template).format(action_choice_core=action_choice_core)
+
+    @property
+    def default_action_state(self) -> str:
+        """Prompt for choosing an action in the default state."""
+        template = """
+        {default_status}
+
+        ## ACTION CHOICES:
+        These are the actions you can currently perform.
+        {default_actions}
+        """
+        return dedent_and_strip(template).format(
+            default_status=self.default_status,
+            default_actions=self.default_actions,
+        )
+
+    def choose_action(self) -> ActionDecision:
+        """Choose an action to perform."""
+        action_choice = query_model(
+            model=precise_model,
+            messages=[
+                SystemMessage(content=self.default_action_state),
+                SystemMessage(content=self.default_action_reasoning),
+            ],
+            preamble="Generating action choice...",
+            color=AGENT_COLOR,
+        )
+        if not (
+            extracted_result := extract_blocks(
+                action_choice, "start_of_action_choice_output"
+            )
+        ):
+            raise ExtractionError("Could not extract action choice from the result.")
+        return ActionDecision.from_yaml_str(extracted_result[0])
+
+    async def execute(self, message: str | None = None) -> str:
+        """Execute the task. Adds a message (if provided) to the task's event log, and adds own message to the event log at the end of execution."""
+
+        action_choice = self.choose_action()
+        breakpoint()
+
+
 
         # ....
-        # > create basic autogen function call config
-        # > run reasoning
+        # map functions
         # convert action choice to actual function call
 
         """
-        {action_choice}
-        # > output must be a Decision
-        # > Decision must have justification
         "extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
         # > when extracting subtasks, always provide a name
         "discuss", # doesn't send actual message yet, just brings up the context for sending message
@@ -712,8 +807,7 @@ class Orchestrator:
             "query",
     """
 
-    async def execute(self, message: str | None = None) -> str:
-        """Execute the task. Adds a message (if provided) to the task's event log, and adds own message to the event log at the end of execution."""
+        breakpoint()
 
         # action choice reasoning
         # ....
@@ -1043,6 +1137,8 @@ class Aranea:
 # ....
 # > each time agent is rerun, its modified blueprint is saved separately
 # > next action execution > placeholder for `wait` action > every action has an output > event log for task also includes agent decisions and thoughts
+# > open interpreter
+# > need to add cancellation reason for cancelled tasks
 
 """action choice
 {action_choice_reasoning} # attribute > reasoning step: think through what knowledge is relevant
@@ -1310,10 +1406,9 @@ def test() -> None:
     # test_serialize()
     # test_deserialize()
     # test_id_generation()
-    # test_full()
-    # asyncio.run(test_full())
     # test_generate_reasoning()
-    test_default_action_reasoning()
+    # test_default_action_reasoning()
+    asyncio.run(test_full())
 
 
 if __name__ == "__main__":
