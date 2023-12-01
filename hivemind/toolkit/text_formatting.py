@@ -1,6 +1,5 @@
 """Text formatting utilities."""
 
-from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from os import makedirs
@@ -15,6 +14,7 @@ from langchain.schema import HumanMessage, SystemMessage
 from hivemind.toolkit.models import query_model, super_broad_model
 from hivemind.toolkit.resource_retrieval import scrape
 from hivemind.toolkit.text_extraction import extract_blocks
+from hivemind.toolkit.timestamp import utc_timestamp
 from hivemind.config import TO_MARKDOWN_API_KEY
 
 
@@ -229,11 +229,6 @@ class ResourceType(Enum):
     UNKNOWN_RESOURCE_TYPE = "Unknown"
 
 
-def generate_timestamp_id() -> str:
-    """Generate an id based on the current timestamp."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M-%S-%f")
-
-
 def retrieve_resource_text(uri: str, resource_type: ResourceType) -> str:
     """Convert a resource to markdown."""
     if (
@@ -278,9 +273,7 @@ def retrieve_resource_text(uri: str, resource_type: ResourceType) -> str:
     if uri_category == UriCategory.WEB_URL and resource_type == ResourceType.PDF:
         response = requests.get(uri, timeout=20)
         makedirs(temp_dir := Path(".data/temp"), exist_ok=True)
-        with open(
-            temp_pdf_file := temp_dir / f"{generate_timestamp_id()}.pdf", "wb"
-        ) as file:
+        with open(temp_pdf_file := temp_dir / f"{utc_timestamp()}.pdf", "wb") as file:
             file.write(response.content)
         return pdf_to_text(temp_pdf_file)
     # local text file
