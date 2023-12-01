@@ -1,7 +1,7 @@
 """Interface for optimizing a semantic component of a system (function, prompt, etc.) using a large language model."""
 
 from dataclasses import dataclass
-from typing import Any, NewType, Iterable, Protocol
+from typing import Any, NewType, Iterable
 from itertools import chain
 from abc import ABC, abstractmethod
 
@@ -11,7 +11,8 @@ ComponentContent = NewType("ComponentContent", str)
 OntologicalContext = NewType("OntologicalContext", str)
 
 
-class Evaluation(Protocol):
+@dataclass
+class Evaluation:
     """Evaluation of a semantic component."""
 
     feedback: str
