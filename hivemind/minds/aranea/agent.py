@@ -3,6 +3,7 @@
 import os
 import asyncio
 import contextlib
+
 from enum import Enum
 from dataclasses import dataclass, asdict, field
 from functools import cached_property
@@ -32,6 +33,7 @@ from hivemind.toolkit.models import super_creative_model, precise_model, query_m
 from hivemind.toolkit.text_extraction import ExtractionError, extract_blocks
 from hivemind.toolkit.text_formatting import dedent_and_strip
 from hivemind.toolkit.yaml_tools import yaml
+from hivemind.toolkit.timestamp import utc_timestamp
 from hivemind.toolkit.types import HivemindReply
 
 BlueprintId = NewType("BlueprintId", str)
@@ -114,15 +116,30 @@ def replace_agent_id(
     )
 
 
+@dataclass(frozen=True)
+class MessageData:
+    """Data for a message."""
+
+    sender: str
+    recipient: str
+    content: str
+
+    def __str__(self) -> str:
+        return f"{self.sender} (to {self.recipient}): {self.content}"
+
+
+EventData = MessageData
+
+
 @dataclass
 class Event:
     """An event in the event log."""
 
-    timestamp: str
-    description: str
+    data: EventData
+    timestamp: str = field(default_factory=utc_timestamp)
 
     def __str__(self) -> str:
-        return f"[{self.timestamp}] {self.description}"
+        return f"[{self.timestamp}] {self.data}"
 
     def to_str_with_pov(self, pov_id: RuntimeId) -> str:
         """String representation of the event with a point of view from a certain executor."""
@@ -268,6 +285,7 @@ class Task:
 
     description: TaskDescription
     owner_id: RuntimeId
+    rank_limit: int | None
     name: str | None = None
     validator: TaskValidator = field(default_factory=Human)
     id: TaskId = field(default_factory=lambda: generate_aranea_id(TaskId))
@@ -384,7 +402,7 @@ class CoreState:
         )
 
 
-def generate_reasoning(
+def generate_action_reasoning(
     role: Role, state: ExecutorState, actions: str, printout: bool = False
 ) -> str:
     """Generate reasoning for choosing an action."""
@@ -424,9 +442,9 @@ def generate_reasoning(
         Provide a step-by-step, robust reasoning process for the orchestrator to sequentially think through the information it has access to so that it has the appropriate mental context for deciding what to do next. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind. Some things to note:
         - The final action that the orchestrator decides on MUST be one of the ORCHESTRATOR ACTIONS described above. The orchestrator cannot perform any other actions.
         - Assume that the orchestrator has access to the information described above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3.
-        - The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use capitalized letters when referring to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section").
+        - The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section").
         - Typically, tasks that are COMPLETED, CANCELLED, IN_PROGRESS, or IN_VALIDATION do not need immediate attention unless the orchestrator discovers information that changes the status of the subtask. Tasks that are NEW or BLOCKED will need action from the orchestrator to start or resume execution respectively.
-        - The reasoning process should be written in second person and be no more than about a half dozen steps.
+        - The reasoning process should be written in second person and be around 5-7 steps.
         - The reasoning steps can refer to the results of previous steps, and it may be effective to build up the orchestrator's mental context step by step, starting from basic information available, similar to writing a procedural script for a program but in natural language instead of code.
 
         Provide the reasoning process in the following format:
@@ -465,17 +483,63 @@ def generate_reasoning(
     raise NotImplementedError
 
 
-@dataclass
+class ActionName(Enum):
+    """Names of actions available to the orchestrator."""
+
+    IDENTIFY_NEW_SUBTASK = "IDENTIFY_NEW_SUBTASK"
+    START_DISCUSSION_FOR_SUBTASK = "START_DISCUSSION_FOR_SUBTASK"
+    MESSAGE_TASK_OWNER = "ASK_MAIN_TASK_OWNER"
+    REPORT_MAIN_TASK_COMPLETE = "REPORT_MAIN_TASK_COMPLETE"
+
+
+@dataclass(frozen=True)
 class ActionDecision:
     """Decision for an action."""
 
     action_choice: str
     justifications: str
 
+    @cached_property
+    def action_name(self) -> str:
+        """Name of the action chosen."""
+        return (
+            self.action_choice.split(":")[0]
+            if ":" in self.action_choice
+            else self.action_choice
+        )
+
+    @cached_property
+    def action_args(self) -> dict[str, str]:
+        """Arguments of the action chosen."""
+        action_args: dict[str, str] = {}
+        if self.action_name == ActionName.MESSAGE_TASK_OWNER.value:
+            action_args["message"] = self.action_choice.split(":")[1].strip().strip('"')
+        return action_args
+
     @classmethod
     def from_yaml_str(cls, yaml_str: str) -> Self:
         """Create an action decision from a YAML string."""
         return cls(**yaml.load(yaml_str))
+
+    def validate_action(self, valid_actions: Iterable[str]) -> None:
+        """Validate that the action is allowed."""
+        for allowed_action in valid_actions:
+            if self.action_choice.startswith(allowed_action):
+                return
+        raise ValueError(
+            "Action choice validation failed.\n"
+            f"{valid_actions=}\n"
+            f"{self.action_choice=}\n"
+        )
+
+
+class ActionStateName(Enum):
+    """States of an action."""
+
+    DEFAULT = "default"
+
+
+PauseExecution = NewType("PauseExecution", bool)
 
 
 @dataclass
@@ -485,6 +549,8 @@ class Orchestrator:
     blueprint: Blueprint
     task: Task
     files_parent_dir: Path
+
+    _action_state: ActionStateName = ActionStateName.DEFAULT
 
     @property
     def id(self) -> RuntimeId:
@@ -509,6 +575,11 @@ class Orchestrator:
         return None if len(ranks) != len(executors) else max(ranks)
 
     @property
+    def rank_limit(self) -> int | None:
+        """Limit of how high the orchestrator can be ranked."""
+        return self.task.rank_limit
+
+    @property
     def rank(self) -> int | None:
         """Rank of the orchestrator."""
         # we always go with existing rank if available b/c executor_max_rank varies and could be < existing rank between runs
@@ -519,7 +590,11 @@ class Orchestrator:
             if self.executor_max_rank is None
             else 1 + self.executor_max_rank
         ) is not None:
-            assert rank < 1, "Rank must be >= 1."
+            assert (
+                rank >= 1
+            ), f"Orchestrator rank must be >= 1. For {self.id}, rank={rank}."
+            if self.rank_limit is not None:
+                rank = min(rank, self.rank_limit)
         return rank
 
     @property
@@ -569,7 +644,7 @@ class Orchestrator:
         - This is not an exhaustive list of all required subtasks for the main task; you may discover additional subtasks that must be done to complete the main task.
 
         ### SUBTASKS (COMPLETED):
-        These tasks have been validated as complete by executors; use this section as a reference for progress in the main task.
+        These tasks have been reported as completed, and validated as such by the validator; use this section as a reference for progress in the main task.
         ```start_of_completed_subtasks
         {completed_subtasks}
         ```end_of_completed_subtasks
@@ -669,7 +744,7 @@ class Orchestrator:
         """Status of recent events."""
         template = """
         ## RECENT EVENTS LOG:
-        This is a log of recent events that have occurred during the execution of the task. This is NOT a complete log—use the task description and subtask statuses to get a complete picture of the current state of the work:
+        This is a log of recent events that have occurred during the execution of the main task. This is NOT a complete log—use the main task description and subtask statuses to get a complete picture of the current state of the work:
         ```start_of_recent_events_log
         {event_log}
         ```end_of_recent_events_log
@@ -695,20 +770,38 @@ class Orchestrator:
         )
 
     @property
+    def default_action_names(self) -> Set[str]:
+        """Names of actions available in the default state."""
+        return {
+            ActionName.IDENTIFY_NEW_SUBTASK.value,
+            ActionName.MESSAGE_TASK_OWNER.value,
+            ActionName.START_DISCUSSION_FOR_SUBTASK.value,
+            ActionName.REPORT_MAIN_TASK_COMPLETE.value,
+        }
+
+    @property
     def default_actions(self) -> str:
         """Actions available in the default state."""
         actions = """
-        - `IDENTIFY_NEW_SUBTASK`: identify a new subtask from the MAIN TASK that is not yet on the existing subtask list. This adds the subtask to the list, assigns it an executor, and gives it the NEW status.
-        - `START_DISCUSSION_FOR_SUBTASK: "{id}"`: open a discussion thread with a subtask's executor, which allows you to exchange information about the subtask, and then optionally updating its status at the end of the discussion—starting, pausing, resuming, cancelling, etc. {id} must be replaced with the id of the subtask to be discussed.
-        - `MESSAGE_TASK_OWNER: "{message}"`: send a message to the task owner to gather or clarify information about the task. {message} must be replaced with the message you want to send.
+        - `{IDENTIFY_NEW_SUBTASK}`: identify a new subtask from the MAIN TASK that is not yet on the existing subtask list. This adds the subtask to the list, assigns it an executor, and gives it the NEW status.
+        - `{START_DISCUSSION_FOR_SUBTASK}: "{{id}}"`: open a discussion thread with a subtask's executor, which allows you to exchange information about the subtask, and then optionally updating its status at the end of the discussion—starting, pausing, resuming, cancelling, etc. {{id}} must be replaced with the id of the subtask to be discussed.
+        - `{MESSAGE_TASK_OWNER}: "{{message}}"`: send a message to the task owner to gather or clarify information about the task. {{message}} must be replaced with the message you want to send.
+        - `{REPORT_MAIN_TASK_COMPLETE}`: report the main task as complete.
         """
-        return dedent_and_strip(actions)
+        return dedent_and_strip(
+            actions.format(
+                IDENTIFY_NEW_SUBTASK=ActionName.IDENTIFY_NEW_SUBTASK.value,
+                START_DISCUSSION_FOR_SUBTASK=ActionName.START_DISCUSSION_FOR_SUBTASK.value,
+                MESSAGE_TASK_OWNER=ActionName.MESSAGE_TASK_OWNER.value,
+                REPORT_MAIN_TASK_COMPLETE=ActionName.REPORT_MAIN_TASK_COMPLETE.value,
+            )
+        )
 
     @property
     def default_action_reasoning(self) -> str:
         """Prompt for choosing an action in the default state."""
         if not self.blueprint.reasoning.default_action_choice:
-            self.blueprint.reasoning.default_action_choice = generate_reasoning(
+            self.blueprint.reasoning.default_action_choice = generate_action_reasoning(
                 self.role, ExecutorState.DEFAULT, self.default_actions, printout=VERBOSE
             )
         action_choice_core = self.blueprint.reasoning.default_action_choice
@@ -736,7 +829,7 @@ class Orchestrator:
         return dedent_and_strip(template).format(action_choice_core=action_choice_core)
 
     @property
-    def default_action_state(self) -> str:
+    def default_action_context(self) -> str:
         """Prompt for choosing an action in the default state."""
         template = """
         {default_status}
@@ -750,13 +843,37 @@ class Orchestrator:
             default_actions=self.default_actions,
         )
 
+    @property
+    def action_state(self) -> ActionStateName:
+        """What action state the orchestrator is in."""
+        return self._action_state
+
+    @action_state.setter
+    def action_state(self, value: ActionStateName) -> None:
+        """Set the action state of the orchestrator."""
+        self._action_state = value
+
+    @property
+    def action_choice_context(self) -> str:
+        """Context for choosing an action."""
+        if self.action_state == ActionStateName.DEFAULT:
+            return self.default_action_context
+        raise NotImplementedError
+
+    @property
+    def action_choice_reasoning(self) -> str:
+        """Prompt for choosing an action."""
+        if self.action_state == ActionStateName.DEFAULT:
+            return self.default_action_reasoning
+        raise NotImplementedError
+
     def choose_action(self) -> ActionDecision:
         """Choose an action to perform."""
         action_choice = query_model(
             model=precise_model,
             messages=[
-                SystemMessage(content=self.default_action_state),
-                SystemMessage(content=self.default_action_reasoning),
+                SystemMessage(content=self.action_choice_context),
+                SystemMessage(content=self.action_choice_reasoning),
             ],
             preamble="Generating action choice...",
             color=AGENT_COLOR,
@@ -769,30 +886,61 @@ class Orchestrator:
             raise ExtractionError("Could not extract action choice from the result.")
         return ActionDecision.from_yaml_str(extracted_result[0])
 
+    @property
+    def events(self) -> list[Event]:
+        """Events that have occurred during the execution of the task."""
+        return self.task.event_log.events
+
+    def message_task_owner(self, message: str) -> PauseExecution:
+        """Send message to task owner."""
+        self.events.append(
+            Event(
+                data=MessageData(
+                    sender=self.id, recipient=self.task.owner_id, content=message
+                )
+            )
+        )
+        return PauseExecution(True)
+
+    def identify_new_subtask(self) -> PauseExecution:
+        """Identify a new subtask."""
+
+
+
+        # subtask extraction prompt
+        breakpoint()
+        # extract subtask
+        breakpoint()
+        # delegate executor
+    def act(self, decision: ActionDecision) -> PauseExecution:
+        """Act on a decision."""
+
+        decision.validate_action(valid_actions=self.default_action_names)
+        if decision.action_name == ActionName.MESSAGE_TASK_OWNER.value:
+            return self.message_task_owner(decision.action_args["message"])
+        if decision.action_name == ActionName.IDENTIFY_NEW_SUBTASK.value:
+            return self.identify_new_subtask()
+
+        # > 
+        breakpoint()
+        # > add cache for human replies
+        # > if a task is set to be complete, trigger validation agent automatically
+
     async def execute(self, message: str | None = None) -> str:
         """Execute the task. Adds a message (if provided) to the task's event log, and adds own message to the event log at the end of execution."""
 
-        action_choice = self.choose_action()
-        breakpoint()
+        while True:
+            action_decision = self.choose_action()
+            pause_execution = self.act(action_decision)
+            if pause_execution:
+                break
 
 
-
-        # ....
-        # map functions
-        # convert action choice to actual function call
-
+            breakpoint()
+            # choose action
+            # execute next action # when extracting subtask, always provide name of subtask
+            # update task status
         """
-        "extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
-        # > when extracting subtasks, always provide a name
-        "discuss", # doesn't send actual message yet, just brings up the context for sending message
-        """
-
-        # > execute_task() must be async
-        """action execution
-        {action_context}
-        {action_execution_reasoning}
-        {action_execution}
-
         "extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
         "discuss_with_agent",
             # these are all options for individual discussion messages
@@ -801,20 +949,8 @@ class Orchestrator:
             "pause_subtask",
             "cancel_subtask",
             "resume_subtask",
-        "discuss_with_task_owner", # doesn't send actual message yet, just brings up the context for sending message
-            "task_completed",
-            "task_blocked",
-            "query",
-    """
-
-        breakpoint()
-
-        # action choice reasoning
-        # ....
-        # choosen action
-        # execute next action
-        breakpoint()
-        # repeat action loop until we get to "return" action (read info from event log)
+        """
+        # update event log with action
         raise NotImplementedError
 
     @classmethod
@@ -894,6 +1030,9 @@ class BlueprintSearchResult:
     score: float
 
 
+DelegationSuccessful = NewType("DelegationSuccessful", bool)
+
+
 @dataclass
 class Delegator:
     """Delegates tasks to executors, creating new ones if needed."""
@@ -914,7 +1053,7 @@ class Delegator:
 
         raise NotImplementedError
 
-        # > agent retrieval: success_rate/(1+rank/10)
+        # > agent retrieval: success_rate/(1 + completion_time) # completion time is squished down to 0-1 scale via x/(1+x)
         # > rank of none can access all agents
         # > use strategy from self
         # > remember to rerank
@@ -931,13 +1070,12 @@ class Delegator:
     def delegate(
         self,
         task: Task,
-        rank_limit: int | None = None,
         max_candidates: int = 10,
-    ) -> bool:
-        """Delegate a task to a specific executor, or create a new one to handle the task. Returns whether delegation was successful."""
-        candidates = self.search_blueprints(task, self.executors_dir, rank_limit)
+    ) -> DelegationSuccessful:
+        """Find an executor to delegate the task to."""
+        candidates = self.search_blueprints(task, self.executors_dir, task.rank_limit)
         if not candidates:
-            return False
+            return DelegationSuccessful(False)
         candidates = sorted(candidates, key=lambda result: result.score, reverse=True)[
             :max_candidates
         ]
@@ -945,8 +1083,9 @@ class Delegator:
             candidate = load_executor(candidate.blueprint)
             if candidate.accepts(task):
                 task.executor = candidate
-                return True
-        return False
+                task.rank_limit = candidate.rank
+                return DelegationSuccessful(True)
+        return DelegationSuccessful(False)
 
     def map_base_capability(self, task: Task) -> BaseCapability | None:
         """Map a task to a base capability if possible."""
@@ -1111,6 +1250,7 @@ class Aranea:
         task = Task(
             description=TaskDescription(message),
             owner_id=self.id,
+            rank_limit=None,
         )
         delegation_successful = self.delegator.delegate(task)
         # blueprints represent known capabilities; so, failure means we must create a new executor
@@ -1303,6 +1443,7 @@ null_test_task = Task(
     description=TaskDescription(
         information="Some information.", definition_of_done="Some definition of done."
     ),
+    rank_limit=None,
     owner_id=NullTestTaskOwner().id,
 )
 
@@ -1312,6 +1453,7 @@ example_test_task = Task(
         information="The files on the flash drive are currently unorganized.",
         definition_of_done="N/A",
     ),
+    rank_limit=None,
     owner_id=Human().id,
 )
 # task: learn how to create langchain agent
@@ -1367,7 +1509,7 @@ def test_id_generation() -> None:
 
 def test_generate_reasoning() -> None:
     """Test generate_reasoning()."""
-    assert generate_reasoning(Role.ORCHESTRATOR, ExecutorState.DEFAULT, printout=True)
+    assert generate_action_reasoning(Role.ORCHESTRATOR, ExecutorState.DEFAULT, printout=True)
 
 
 def test_default_action_reasoning() -> None:
