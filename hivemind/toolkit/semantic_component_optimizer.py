@@ -1,8 +1,8 @@
 """Interface for optimizing a semantic component of a system (function, prompt, etc.) using a large language model."""
 
-from typing import Any, NewType, Iterable
-from itertools import chain
 from dataclasses import dataclass
+from typing import Any, NewType, Iterable, Protocol
+from itertools import chain
 from abc import ABC, abstractmethod
 
 
@@ -11,12 +11,11 @@ ComponentContent = NewType("ComponentContent", str)
 OntologicalContext = NewType("OntologicalContext", str)
 
 
-@dataclass
-class Evaluation:
+class Evaluation(Protocol):
     """Evaluation of a semantic component."""
 
-    rating: float
     feedback: str
+    rating: float | None
 
 
 @dataclass
@@ -59,7 +58,6 @@ class SemanticComponentOptimizer(ABC):
     def generate_improved_components(
         self,
         component: ComponentContent,
-        rating_threshold: float = 0.0,
     ) -> ComponentPool:
         """Attempt to create improved versions of a component, gated by a threshold."""
         component_candidates = self.generate_component_variations(
@@ -77,7 +75,6 @@ class SemanticComponentOptimizer(ABC):
             for candidate, output, evaluation in zip(
                 component_candidates, outputs, evaluations
             )
-            if evaluation.rating > rating_threshold
         ]
 
     @abstractmethod
@@ -85,7 +82,9 @@ class SemanticComponentOptimizer(ABC):
         """Select components from the component pool that would be improved. Usually these would be components with high ratings."""
 
     @abstractmethod
-    def filter_component_pool(self, components: ComponentPool) -> ComponentPool:
+    def sort_and_filter_component_pool(
+        self, components: ComponentPool
+    ) -> ComponentPool:
         """Remove components from the component pool that are not up to standard. Usually these would be components with low ratings."""
 
     def improve_component_pool(
@@ -100,4 +99,6 @@ class SemanticComponentOptimizer(ABC):
                 for candidate in improvement_candidates
             )
         )
-        return self.filter_component_pool(chain(components, improved_components))
+        return self.sort_and_filter_component_pool(
+            chain(components, improved_components)
+        )
