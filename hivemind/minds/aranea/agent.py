@@ -89,8 +89,8 @@ class Blueprint:
 class TaskWorkStatus(Enum):
     """Status of the work for a task."""
 
-    NEW = "NEW"
-    DELEGATED = "DELEGATED"
+    IDENTIFIED = "IDENTIFIED"
+    IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"
     BLOCKED = "BLOCKED"
@@ -101,8 +101,8 @@ class TaskEventStatus(Enum):
     """Status of the events for a task."""
 
     NONE = "none"
-    AWAITING_AGENT = "you are awaiting response from the subtask executor"
-    AWAITING_YOU = "the subtask executor is awaiting a response from you"
+    AWAITING_EXECUTOR = "you are awaiting response from the subtask executor"
+    AWAITING_OWNER = "the subtask executor is awaiting a response from you"
 
 
 def replace_agent_id(
@@ -217,6 +217,11 @@ class EventLog:
 
     events: list[Event] = field(default_factory=list)
 
+    @property
+    def last_event(self) -> Event | None:
+        """Last event in the event log."""
+        return self.events[-1] if self.events else None
+
     def to_str_with_pov(self, pov_id: RuntimeId) -> str:
         """String representation of the event log with a point of view from a certain executor."""
         return (
@@ -228,6 +233,10 @@ class EventLog:
     def recent(self, num_recent: int) -> Self:
         """Recent events."""
         return EventLog(events=self.events[-num_recent:])
+
+    def add(self, events: Sequence[Event]) -> None:
+        """Add events to the event log."""
+        self.events.extend(events)
 
 
 @dataclass
@@ -291,7 +300,7 @@ class Task:
     id: TaskId = field(default_factory=lambda: generate_aranea_id(TaskId))
     executor: Executor | None = None
     notes: dict[str, str] = field(default_factory=dict)
-    work_status: TaskWorkStatus = TaskWorkStatus.NEW
+    work_status: TaskWorkStatus = TaskWorkStatus.IDENTIFIED
     event_status: TaskEventStatus = TaskEventStatus.NONE
 
     @cached_property
@@ -386,9 +395,9 @@ class CoreState:
             self.subtasks.filter_by_status(TaskWorkStatus.IN_VALIDATION)
         )
         delegated_subtasks = str(
-            self.subtasks.filter_by_status(TaskWorkStatus.DELEGATED)
+            self.subtasks.filter_by_status(TaskWorkStatus.IN_PROGRESS)
         )
-        new_subtasks = str(self.subtasks.filter_by_status(TaskWorkStatus.NEW))
+        new_subtasks = str(self.subtasks.filter_by_status(TaskWorkStatus.IDENTIFIED))
         blocked_subtasks = str(self.subtasks.filter_by_status(TaskWorkStatus.BLOCKED))
         return dedent_and_strip(self.template).format(
             knowledge=self.knowledge,
@@ -402,61 +411,85 @@ class CoreState:
         )
 
 
+class ActionName(Enum):
+    """Names of actions available to the orchestrator."""
+
+    IDENTIFY_NEW_SUBTASK = "IDENTIFY_NEW_SUBTASK"
+    START_DISCUSSION_FOR_SUBTASK = "START_DISCUSSION_FOR_SUBTASK"
+    MESSAGE_TASK_OWNER = "ASK_MAIN_TASK_OWNER"
+    REPORT_MAIN_TASK_COMPLETE = "REPORT_MAIN_TASK_COMPLETE"
+
+
+ORCHESTRATOR_CONCEPTS = f"""
+- ORCHESTRATOR: the agent that is responsible for managing the execution of a main task and managing the statuses of its subtasks, while communicating with the task's owner to gather required information for the task. The orchestrator must communicate with both the task owner and subtask executors to complete the main task as efficiently as possible.
+- MAIN TASK: the main task that the orchestrator is responsible for managing, which it does by identifying subtasks and providing support for specialized executor agents for the subtasks.
+- SUBTASK: a task that must be executed in order to complete the main task. The orchestrator does NOT execute subtasks itself; instead, it facilitates the resolution of subtasks by making high-level decisions regarding each subtask in the context of the overall task and providing support for the subtask executors.
+- SUBTASK STATUS: the status of subtasks that have already been identified. The status of a subtask can be one of the following:
+    - {TaskWorkStatus.IDENTIFIED.value}: the subtask has been newly identified and has not started execution yet.
+    - {TaskWorkStatus.BLOCKED.value}: the subtask is blocked by some issue, and execution cannot continue until the issue is resolved, typically by discussing the blocker and/or identifying a new subtask to resolve the blocker.
+    - {TaskWorkStatus.IN_PROGRESS.value}: the subtask is currently being executed by a subtask executor.
+    - {TaskWorkStatus.IN_VALIDATION.value}: the subtask has been reported as completed by its executor, but is still being validated by a validator. Validation happens automatically and does not require or action from the orchestrator.
+    - {TaskWorkStatus.COMPLETED.value}: the subtask has been validated as complete by a validator. Completed subtasks provide a record of overall successful progress for the main task.
+    - {TaskWorkStatus.CANCELLED.value}: the subtask has been cancelled for various reason and will not be done.
+- SUBTASK EXECUTOR: an agent that is responsible for executing a subtask. Subtask executors specialize in executing certain types of tasks; whenever a subtask is identified, an executor is automatically assigned to it without any action required from the orchestrator.
+- MAIN TASK OWNER: the one who requested the main task to be done. The orchestrator must communicate with the task owner to gather background information required to complete the main task.
+"""
+
+ORCHESTRATOR_INFORMATION_SECTIONS = """
+- KNOWLEDGE: background knowledge relating to the orchestrator's area of specialization. The information may or may not be relevant to the specific main task, but is provided as support for the orchestrator's decisionmaking.
+- MAIN TASK DESCRIPTION: a description of all information about the main task that the orchestrator has learned so far from the task owner. This may NOT be a complete description of the main task, so the orchestrator must always take into account if there is enough information for performing its actions.
+- SUBTASKS: a list of all subtasks that have been extracted by the orchestrator so far; for each one, there is a high-level description of what must be done, as well as the subtask's status. This is not an exhaustive list of all required subtasks for the main task; there may be additional subtasks that are required. This list is automatically maintained and updated by a background process.
+- RECENT EVENTS LOG: a log of recent events that have occurred during the execution of the task. This can include status updates for subtasks, messages from the task owner, and the orchestrator's own previous thoughts/decisions
+"""
+
+
 def generate_action_reasoning(
     role: Role, state: ExecutorState, actions: str, printout: bool = False
 ) -> str:
     """Generate reasoning for choosing an action."""
     if role == Role.ORCHESTRATOR and state == ExecutorState.DEFAULT:
-        system = """
+        context = """
         ## MISSION:
-        You are the instructor for an AI task orchestration agent. Your purpose to provide step-by-step guidance for the agent to think through what it must do next.
+        You are the instructor for an AI task orchestration agent. Your purpose is to provide step-by-step guidance for the agent to think through what it must do next.
 
         ## CONCEPTS:
-        The following are some concepts that is relevant to your role as an instructor:
-        - ORCHESTRATOR: the agent that is responsible for managing the execution of a main task and managing the statuses of its subtasks, while communicating with the task's owner to gather required information for the task. The orchestrator must communicate with both the task owner and subtask executors to complete the main task as efficiently as possible.
-        - MAIN TASK: the main task that the orchestrator is responsible for managing, which it does by identifying subtasks and providing support for specialized executor agents for the subtasks.
-        - SUBTASK: a task that must be executed in order to complete the main task. The orchestrator does NOT execute subtasks itself; instead, it facilitates the resolution of subtasks by making high-level decisions regarding each subtask in the context of the overall task and providing support for the subtask executors.
-        - SUBTASK STATUS: the status of each subtask. The status of a subtask can be one of the following:
-            - NEW: the subtask has been newly created via the CREATE NEW SUBTASK action and has not been started yet.
-            - BLOCKED: the subtask is blocked by some issue, and execution cannot continue until the issue is resolved, typically by discussing the blocker and/or creating a new subtask to resolve the blocker.
-            - IN_PROGRESS: the subtask is currently being executed by a subtask executor.
-            - IN_VALIDATION: the subtask has been reported as completed by its executor, but is still being validated by a validator. Validation happens automatically and does not require or action from the orchestrator.
-            - COMPLETED: the subtask has been validated as complete by a validator.
-            - CANCELLED: the subtask has been cancelled for various reason and will not be done.
-        - SUBTASK EXECUTOR: an agent that is responsible for executing a subtask. Subtask executors specialize in executing certain types of tasks; whenever a subtask begins execution, an executor is automatically assigned to it, which the orchestrator can then communicate with.
-        - MAIN TASK OWNER: the one who requested the main task to be done. The orchestrator must communicate with the task owner to gather background information required to complete the main task.
+        The following are some concepts that are relevant to your role as an instructor:
+        {concepts}
 
         ## ORCHESTRATOR INFORMATION SECTIONS:
         By default, the orchestrator has access to the following:
-        - KNOWLEDGE: background knowledge relating to the orchestrator's area of specialization. The information may or may not be relevant to the specific main task, but is provided as support for the orchestrator's decisionmaking.
-        - MAIN TASK DESCRIPTION: a description of all information about the main task that the orchestrator has learned so far from the task owner. This may NOT be a complete description of the main task, so the orchestrator must always take into account if there is enough information for performing its actions.
-        - SUBTASKS: a list of all subtasks that have been extracted by the orchestrator so far; for each one, there is a high-level description of what must be done, as well as the subtask's status. This is not an exhaustive list of all required subtasks for the main task; there may be additional subtasks that are required.
-        - RECENT EVENTS LOG: a log of recent events that have occurred during the execution of the task. This can include status updates for subtasks, messages from the task owner, and the orchestrator's own previous thoughts/decisions
+        {information_sections}
 
         ## ORCHESTRATOR ACTIONS:
         In its default state, the orchestrator can perform the following actions:
         {actions}
         """
-        request = """
+        request = f"""
         ## REQUEST FOR YOU:
         Provide a step-by-step, robust reasoning process for the orchestrator to sequentially think through the information it has access to so that it has the appropriate mental context for deciding what to do next. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind. Some things to note:
         - The final action that the orchestrator decides on MUST be one of the ORCHESTRATOR ACTIONS described above. The orchestrator cannot perform any other actions.
         - Assume that the orchestrator has access to the information described above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3.
         - The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section").
-        - Typically, tasks that are COMPLETED, CANCELLED, IN_PROGRESS, or IN_VALIDATION do not need immediate attention unless the orchestrator discovers information that changes the status of the subtask. Tasks that are NEW or BLOCKED will need action from the orchestrator to start or resume execution respectively.
+        - Typically, tasks that are {TaskWorkStatus.COMPLETED.value}, {TaskWorkStatus.CANCELLED.value}, {TaskWorkStatus.IN_PROGRESS.value}, or {TaskWorkStatus.IN_VALIDATION.value} do not need immediate attention unless the orchestrator discovers information that changes the status of the subtask. Tasks that are NEW or BLOCKED will need action from the orchestrator to start or resume execution respectively.
         - The reasoning process should be written in second person and be around 5-7 steps.
         - The reasoning steps can refer to the results of previous steps, and it may be effective to build up the orchestrator's mental context step by step, starting from basic information available, similar to writing a procedural script for a program but in natural language instead of code.
 
         Provide the reasoning process in the following format:
         ```start_of_reasoning_process
-        1. {reasoning step 1}
-        2. {reasoning step 2}
+        1. {{reasoning step 1}}
+        2. {{reasoning step 2}}
         3. [... etc.]
         ```end_of_reasoning_process
         You may add comments or thoughts before or after the reasoning process, but the reasoning process block itself must only contain the reasoning steps, directed at the orchestrator.
         """
         messages = [
-            SystemMessage(content=dedent_and_strip(system).format(actions=actions)),
+            SystemMessage(
+                content=dedent_and_strip(context).format(
+                    actions=actions,
+                    concepts=ORCHESTRATOR_CONCEPTS,
+                    information_sections=ORCHESTRATOR_INFORMATION_SECTIONS,
+                )
+            ),
             SystemMessage(content=dedent_and_strip(request)),
         ]
         if printout:
@@ -483,13 +516,68 @@ def generate_action_reasoning(
     raise NotImplementedError
 
 
-class ActionName(Enum):
-    """Names of actions available to the orchestrator."""
+def generate_extraction_reasoning(printout: bool = False) -> str:
+    """Generate reasoning for choosing an action."""
+    context = """
+    ## MISSION:
+    You are the instructor for an AI task orchestration agent. Your purpose is to provide step-by-step guidance for the agent to think through how to identify the next subtask from the main task description.
 
-    IDENTIFY_NEW_SUBTASK = "IDENTIFY_NEW_SUBTASK"
-    START_DISCUSSION_FOR_SUBTASK = "START_DISCUSSION_FOR_SUBTASK"
-    MESSAGE_TASK_OWNER = "ASK_MAIN_TASK_OWNER"
-    REPORT_MAIN_TASK_COMPLETE = "REPORT_MAIN_TASK_COMPLETE"
+    ## CONCEPTS:
+    {concepts}
+
+    ## ORCHESTRATOR INFORMATION SECTIONS:
+    By default, the orchestrator has access to the following information. Note that all information here is read-only; while identifying new subtasks, the orchestrator cannot modify any of the information here.
+    {information_sections}
+
+    ## MODULAR SUBTASK INDENTIFICATION PHILOSOPHY
+    "Modular Subtask Identification" (MSI) is a philosophy for identifying a required subtask from a main task that emphasizes two principles:
+    - orthogonality: the identified subtask is as independent from the rest of the uncompleted main task as possible. This allows it to be executed in isolation without requiring any other subtasks to be completed first.
+    - small input/output footprint: the identified subtask has a small input and output footprint, meaning that it requires little information to be provided to it, and provides compact output. This reduces the amount of context needed to understand the subtask and its results.
+
+    """
+    request = """
+    ## REQUEST FOR YOU:
+    Provide a step-by-step, robust reasoning process for the orchestrator to a) sequentially process the information in the information sections it has access to so that it can identify a new subtask that is not yet identified, and b) understand what MSI is and follow its principles. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind before they perform subtask identification. Some things to note:
+    - Assume that the orchestrator has access to the information described above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3.
+    - The orchestrator requires precise references to information in its information sections, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section").
+    - In its current state, the orchestrator is not able to perform any other actions besides subtask identification and the reasoning preceeding it.
+    - The orchestrator should only perform the subtask identification after it has considered _all_ the information it needs. No other actions need to be performed after subtask identification.
+    - The reasoning process should be written in second person and be around 5-7 steps.
+    - The reasoning steps can refer to the results of previous steps, and it may be effective to build up the orchestrator's mental context step by step, starting from basic information available, similar to writing a procedural script for a program but in natural language instead of code.
+    Provide the reasoning process in the following format:
+    ```start_of_reasoning_process
+    1. {reasoning step 1}
+    2. {reasoning step 2}
+    3. [... etc.]
+    ```end_of_reasoning_process
+    You may add comments or thoughts before or after the reasoning process, but the reasoning process block itself must only contain the reasoning steps, directed at the orchestrator.
+    """
+    messages = [
+        SystemMessage(
+            content=dedent_and_strip(context).format(
+                concepts=ORCHESTRATOR_CONCEPTS,
+                information_sections=ORCHESTRATOR_INFORMATION_SECTIONS,
+            )
+        ),
+        SystemMessage(content=dedent_and_strip(request)),
+    ]
+    if printout:
+        result = query_model(
+            model=super_creative_model,
+            messages=messages,
+            preamble="Generating extraction reasoning...",
+            color=AGENT_COLOR,
+            printout=printout,
+        )
+    else:
+        result = query_model(
+            model=super_creative_model,
+            messages=messages,
+            printout=printout,
+        )
+    if not (extracted_result := extract_blocks(result, "start_of_reasoning_process")):
+        raise ExtractionError("Could not extract reasoning process from the result.")
+    return extracted_result[0]
 
 
 @dataclass(frozen=True)
@@ -540,6 +628,16 @@ class ActionStateName(Enum):
 
 
 PauseExecution = NewType("PauseExecution", bool)
+
+
+@dataclass
+class ActionResult:
+    """Result of an action."""
+
+    pause_execution: PauseExecution
+    new_events: list[Event]
+    new_work_status: TaskWorkStatus
+    new_event_status: TaskEventStatus
 
 
 @dataclass
@@ -783,7 +881,7 @@ class Orchestrator:
     def default_actions(self) -> str:
         """Actions available in the default state."""
         actions = """
-        - `{IDENTIFY_NEW_SUBTASK}`: identify a new subtask from the MAIN TASK that is not yet on the existing subtask list. This adds the subtask to the list, assigns it an executor, and gives it the NEW status.
+        - `{IDENTIFY_NEW_SUBTASK}`: identify a new subtask from the MAIN TASK that is not yet on the existing subtask list. This adds the subtask to the list, assigns it an executor, and gives it the {IDENTIFIED} status.
         - `{START_DISCUSSION_FOR_SUBTASK}: "{{id}}"`: open a discussion thread with a subtask's executor, which allows you to exchange information about the subtask, and then optionally updating its status at the end of the discussion—starting, pausing, resuming, cancelling, etc. {{id}} must be replaced with the id of the subtask to be discussed.
         - `{MESSAGE_TASK_OWNER}: "{{message}}"`: send a message to the task owner to gather or clarify information about the task. {{message}} must be replaced with the message you want to send.
         - `{REPORT_MAIN_TASK_COMPLETE}`: report the main task as complete.
@@ -791,6 +889,7 @@ class Orchestrator:
         return dedent_and_strip(
             actions.format(
                 IDENTIFY_NEW_SUBTASK=ActionName.IDENTIFY_NEW_SUBTASK.value,
+                IDENTIFIED=TaskWorkStatus.IDENTIFIED.value,
                 START_DISCUSSION_FOR_SUBTASK=ActionName.START_DISCUSSION_FOR_SUBTASK.value,
                 MESSAGE_TASK_OWNER=ActionName.MESSAGE_TASK_OWNER.value,
                 REPORT_MAIN_TASK_COMPLETE=ActionName.REPORT_MAIN_TASK_COMPLETE.value,
@@ -891,28 +990,43 @@ class Orchestrator:
         """Events that have occurred during the execution of the task."""
         return self.task.event_log.events
 
-    def message_task_owner(self, message: str) -> PauseExecution:
-        """Send message to task owner."""
-        self.events.append(
-            Event(
-                data=MessageData(
-                    sender=self.id, recipient=self.task.owner_id, content=message
-                )
-            )
+    def message_task_owner(self, message: str) -> ActionResult:
+        """Send message to main task owner. Main task is blocked until there is a reply."""
+        return ActionResult(
+            new_events=[
+                Event(
+                    data=MessageData(
+                        sender=self.id, recipient=self.task.owner_id, content=message
+                    )
+                ),
+            ],
+            pause_execution=PauseExecution(True),
+            new_work_status=TaskWorkStatus.BLOCKED,
+            new_event_status=TaskEventStatus.AWAITING_OWNER,
         )
-        return PauseExecution(True)
+        # > self.events.append
+
+    @property
+    def subtask_extraction_reasoning(self) -> str:
+        """Prompt for extracting a subtask."""
+        breakpoint()
+        if not self.blueprint.reasoning.subtask_extraction:
+            self.blueprint.reasoning.subtask_extraction = generate_extraction_reasoning(
+                printout=VERBOSE
+            )
+        return self.blueprint.reasoning.subtask_extraction
 
     def identify_new_subtask(self) -> PauseExecution:
         """Identify a new subtask."""
-
-
 
         # subtask extraction prompt
         breakpoint()
         # extract subtask
         breakpoint()
         # delegate executor
-    def act(self, decision: ActionDecision) -> PauseExecution:
+        # > mordin mode for reasoning generator
+
+    def act(self, decision: ActionDecision) -> ActionResult:
         """Act on a decision."""
 
         decision.validate_action(valid_actions=self.default_action_names)
@@ -921,37 +1035,65 @@ class Orchestrator:
         if decision.action_name == ActionName.IDENTIFY_NEW_SUBTASK.value:
             return self.identify_new_subtask()
 
-        # > 
+        # >
         breakpoint()
-        # > add cache for human replies
-        # > if a task is set to be complete, trigger validation agent automatically
+        # "extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
+        # "discuss_with_agent",
+        #     # these are all options for individual discussion messages
+        #     "informational",
+        #     "start_subtask",
+        #     "pause_subtask",
+        #     "cancel_subtask",
+        #     "resume_subtask",
+
+    def message_from_owner(self, message: str) -> Event:
+        """Create a message from the task owner."""
+        return Event(
+            data=MessageData(
+                sender=self.task.owner_id,
+                recipient=self.id,
+                content=message,
+            )
+        )
+
+    def message_to_owner(self, message: str) -> Event:
+        """Create a message to the task owner."""
+        return Event(
+            data=MessageData(
+                sender=self.id,
+                recipient=self.task.owner_id,
+                content=message,
+            )
+        )
 
     async def execute(self, message: str | None = None) -> str:
         """Execute the task. Adds a message (if provided) to the task's event log, and adds own message to the event log at the end of execution."""
-
+        if message is not None:
+            self.task.event_log.add([self.message_from_owner(message)])
         while True:
             action_decision = self.choose_action()
-            pause_execution = self.act(action_decision)
-            if pause_execution:
+            action_result = self.act(action_decision)
+            if action_result.new_events:
+                self.task.event_log.add(action_result.new_events)
+            self.task.work_status = action_result.new_work_status
+            self.task.event_status = action_result.new_event_status
+            if action_result.pause_execution:
                 break
 
-
-            breakpoint()
+            raise NotImplementedError
             # choose action
             # execute next action # when extracting subtask, always provide name of subtask
             # update task status
-        """
-        "extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
-        "discuss_with_agent",
-            # these are all options for individual discussion messages
-            "informational",
-            "start_subtask",
-            "pause_subtask",
-            "cancel_subtask",
-            "resume_subtask",
-        """
-        # update event log with action
-        raise NotImplementedError
+        if not (last_event := self.task.event_log.last_event):
+            raise NotImplementedError
+        if not isinstance(last_event.data, MessageData):  # type: ignore
+            raise NotImplementedError
+        if (
+            last_event.data.sender != self.id
+            and last_event.data.recipient != self.task.owner_id
+        ):
+            raise NotImplementedError
+        return last_event.data.content
 
     @classmethod
     def load(
@@ -1248,7 +1390,7 @@ class Aranea:
         if not self.executors_dir.exists():
             self.executors_dir.mkdir(parents=True, exist_ok=True)
         task = Task(
-            description=TaskDescription(message),
+            description=TaskDescription(information=message),
             owner_id=self.id,
             rank_limit=None,
         )
@@ -1273,8 +1415,9 @@ class Aranea:
         )
 
 
-# choose action
 # ....
+# > set up test structure > add cache for human replies
+# > if a task is set to be complete, trigger validation agent automatically
 # > each time agent is rerun, its modified blueprint is saved separately
 # > next action execution > placeholder for `wait` action > every action has an output > event log for task also includes agent decisions and thoughts
 # > open interpreter
@@ -1509,7 +1652,9 @@ def test_id_generation() -> None:
 
 def test_generate_reasoning() -> None:
     """Test generate_reasoning()."""
-    assert generate_action_reasoning(Role.ORCHESTRATOR, ExecutorState.DEFAULT, printout=True)
+    assert generate_action_reasoning(
+        Role.ORCHESTRATOR, ExecutorState.DEFAULT, printout=True
+    )
 
 
 def test_default_action_reasoning() -> None:
@@ -1535,6 +1680,11 @@ def test_default_action_reasoning() -> None:
     print(output)
 
 
+def test_generate_extraction_reasoning() -> None:
+    """Run test."""
+    generate_extraction_reasoning(printout=True)
+
+
 async def test_full() -> None:
     """Run a full flow on an example task."""
     aranea = Aranea(Path(".data/test/aranea"))
@@ -1550,6 +1700,7 @@ def test() -> None:
     # test_id_generation()
     # test_generate_reasoning()
     # test_default_action_reasoning()
+    # test_generate_extraction_reasoning()
     asyncio.run(test_full())
 
 
