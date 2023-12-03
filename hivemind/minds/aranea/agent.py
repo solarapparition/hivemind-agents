@@ -143,9 +143,12 @@ class Event:
         # return f"[{self.timestamp}] {self.data}"
         return f"{self.data}"
 
-    def to_str_with_pov(self, pov_id: RuntimeId) -> str:
+    def to_str_with_pov(
+        self, pov_id: RuntimeId, other_id: RuntimeId, other_name: str
+    ) -> str:
         """String representation of the event with a point of view from a certain executor."""
-        return replace_agent_id(str(self), "You", pov_id)
+        event_printout = replace_agent_id(str(self), "You", pov_id)
+        return replace_agent_id(event_printout, other_name, other_id)
 
 
 class TaskValidator(Protocol):
@@ -248,10 +251,17 @@ class EventLog:
         """Last event in the event log."""
         return self.events[-1] if self.events else None
 
-    def to_str_with_pov(self, pov_id: RuntimeId) -> str:
+    def to_str_with_pov(
+        self, pov_id: RuntimeId, other_id: RuntimeId, other_name: str
+    ) -> str:
         """String representation of the event log with a point of view from a certain executor."""
         return (
-            "\n".join([event.to_str_with_pov(pov_id) for event in self.events])
+            "\n".join(
+                [
+                    event.to_str_with_pov(pov_id, other_id, other_name)
+                    for event in self.events
+                ]
+            )
             if self.events
             else "None"
         )
@@ -446,6 +456,8 @@ class ActionName(Enum):
     REPORT_MAIN_TASK_COMPLETE = "REPORT_MAIN_TASK_COMPLETE"
 
 
+MAIN_TASK_OWNER = "MAIN TASK OWNER"
+
 ORCHESTRATOR_CONCEPTS = f"""
 - ORCHESTRATOR: the agent that is responsible for managing the execution of a main task and managing the statuses of its subtasks, while communicating with the task's owner to gather required information for the task. The orchestrator must communicate with both the task owner and subtask executors to complete the main task as efficiently as possible.
 - MAIN TASK: the main task that the orchestrator is responsible for managing, which it does by identifying subtasks and providing support for specialized executor agents for the subtasks.
@@ -458,7 +470,7 @@ ORCHESTRATOR_CONCEPTS = f"""
     - {TaskWorkStatus.COMPLETED.value}: the subtask has been validated as complete by a validator. Completed subtasks provide a record of overall successful progress for the main task.
     - {TaskWorkStatus.CANCELLED.value}: the subtask has been cancelled for various reason and will not be done.
 - SUBTASK EXECUTOR: an agent that is responsible for executing a subtask. Subtask executors specialize in executing certain types of tasks; whenever a subtask is identified, an executor is automatically assigned to it without any action required from the orchestrator.
-- MAIN TASK OWNER: the one who requested the main task to be done. The orchestrator must communicate with the task owner to gather background information required to complete the main task.
+- {MAIN_TASK_OWNER}: the one who requested the main task to be done. The orchestrator must communicate with the task owner to gather background information required to complete the main task.
 """
 
 ORCHESTRATOR_INFORMATION_SECTIONS = """
@@ -888,7 +900,7 @@ class Orchestrator:
         return dedent_and_strip(template).format(
             event_log=self.task.event_log.recent(
                 self.recent_events_size
-            ).to_str_with_pov(self.id),
+            ).to_str_with_pov(self.id, self.task.owner_id, MAIN_TASK_OWNER),
         )
 
     @property
@@ -1005,8 +1017,6 @@ class Orchestrator:
 
     def choose_action(self) -> ActionDecision:
         """Choose an action to perform."""
-        print(self.action_choice_context)
-        breakpoint()
         action_choice = query_model(
             model=precise_model,
             messages=[
@@ -1466,11 +1476,10 @@ class Aranea:
 
 
 # ....
-# in event log, replace agent ids with agent handles
-# > merge human vs bot capabilities—human execution time should be be enough of a penalty
-# > if a task is set to be complete, trigger validation agent automatically
+# add placeholder code for when event log fills up
+# merge human vs bot capabilities—human execution time should be be enough of a penalty
 # > next action execution > placeholder for `wait` action > event log for task also includes agent decisions and thoughts
-# > every time event log fills up, extract updated info for main task description
+# > if a task is set to be complete, trigger validation agent automatically
 # knowledge learning: level of confidence about the knowledge # when updating knowledge, can add, subtract, update, or promote/demote knowledge
 # knowledge learning: must define terms
 # each time agent is rerun, its modified blueprint is saved separately
