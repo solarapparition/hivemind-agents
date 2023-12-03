@@ -2,24 +2,36 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, TypeVar, Generic
+from pathlib import Path
+from typing import Any, Callable, List, TypeVar, Generic
+from colorama import Fore
 
+from langchain.schema import SystemMessage
+
+from hivemind.config import configure_langchain_cache
+from hivemind.toolkit.models import super_creative_model, query_model
 from hivemind.toolkit.text_formatting import dedent_and_strip
+from hivemind.toolkit.text_extraction import extract_blocks
+
+AGENT_COLOR = Fore.RED
 
 
 T = TypeVar("T")
 NA_STRING = "N/A"
+configure_langchain_cache(Path(".data/hephaestus/llm_cache.db"))
 
 
 @dataclass
 class Component(Generic[T]):
     """A component of some system."""
 
+    content: str
+
     # >
     # > some way to convert text representation of component to actual component
 
 
-class ComponentType(Enum):
+class ComponentTypeName(Enum):
     """Type of component."""
 
     FUNCTION = "function"
@@ -33,7 +45,7 @@ class ComponentForge(Generic[T]):
     """Forge and maintain some component."""
 
     name: str
-    component_type: ComponentType
+    component_type: ComponentTypeName
     description: str
     usage_context: str
     top_k_variations: int
@@ -63,7 +75,7 @@ class ComponentForge(Generic[T]):
         """Generate variations of the component."""
         context = """
         ## MISSION
-        You are a {component_type} forger, able to create and improve upon variations of a {component_type} based on specifications and feedback, given below.
+        You are a {component_type} forging agent, able to create and improve upon variations of a {component_type} based on specifications and feedback, given below.
 
         ## {COMPONENT_TYPE} DESCRIPTION
         The {component_type} you are working on is called `{component_name}`, with the following description:
@@ -122,11 +134,23 @@ class ComponentForge(Generic[T]):
         ```end_of_action_choice_output
         Any additional comments or thoughts can be added before or after the required output.
         """
-        from hivemind.toolkit.models import super_creative_model, query_model
-        from langchain.schema import HumanMessage, SystemMessage
 
-        breakpoint()
-        # > query
+        messages = [
+            SystemMessage(content=dedent_and_strip(context)),
+            SystemMessage(content=dedent_and_strip(request)),
+        ]
+        result = query_model(
+            super_creative_model,
+            messages,
+            printout=True,
+            color=AGENT_COLOR,
+            preamble=f"Creating variation for component `{self.name}...",
+        ).strip()
+        component_generation_output = extract_blocks(
+            result, "start_of_component_generation_output"
+        )
+        assert component_generation_output is not None
+        return Component(component_generation_output[0])
 
     def validate(self) -> bool:
         """Validate version ."""
@@ -136,41 +160,42 @@ class ComponentForge(Generic[T]):
         """Optimize the prompt."""
         raise NotImplementedError
 
+forge_test_name = "process_employee_data"
+forge_test_description = """
+A Python function that processes and normalizes datasets.
+Accepts a list of dictionaries, each representing a data record.
+Cleans data by removing empty fields and standardizing text (e.g., case normalization).
+Normalizes income data, scaling values to a proportion of 100000.
+Outputs a list of dictionaries with cleaned and normalized data.
+
+Parameters and Return Type:
+- Input: data_records (List[Dict[str, Union[str, int, float]]]) - A list of dictionaries, each containing various data fields.
+- Output: List[Dict[str, Union[str, float]]] - Processed data records.
+"""
+forge_test_usage_context = """
+raw_data = [
+    {"name": "John Doe", "age": 30, "income": 50000, "comment": ""},
+    {"name": "jane smith", "age": "", "income": 70000, "comment": "senior analyst"}
+]
+processed_data = process_employee_data(raw_data)
+print(processed_data)
+# [
+    # {"name": "John Doe", "age": 30, "income": 0.5, "comment": None},  # assuming income is normalized to 0-1 scale
+    # {"name": "Jane Smith", "age": None, "income": 0.7, "comment": "Senior Analyst"}  # text fields are capitalized, missing age represented as None
+# ]
+"""
+forge_test = ComponentForge[Callable[..., Any]](
+    name=forge_test_name,
+    component_type=ComponentTypeName.FUNCTION,
+    description=dedent_and_strip(forge_test_description),
+    usage_context=dedent_and_strip(forge_test_usage_context),
+    top_k_variations=3,
+)
 
 def test_generate_variation() -> None:
     """Test generate variation."""
-    name = "process_employee_data"
-    description = """
-    A Python function that processes and normalizes datasets.
-    Accepts a list of dictionaries, each representing a data record.
-    Cleans data by removing empty fields and standardizing text (e.g., case normalization).
-    Normalizes income data, scaling values to a proportion of 100000.
-    Outputs a list of dictionaries with cleaned and normalized data.
-    
-    Parameters and Return Type:
-    - Input: data_records (List[Dict[str, Union[str, int, float]]]) - A list of dictionaries, each containing various data fields.
-    - Output: List[Dict[str, Union[str, float]]] - Processed data records.
-    """
-    usage_context = """
-    raw_data = [
-        {"name": "John Doe", "age": 30, "income": 50000, "comment": ""},
-        {"name": "jane smith", "age": "", "income": 70000, "comment": "senior analyst"}
-    ]
-    processed_data = process_employee_data(raw_data)
-    print(processed_data)
-    # [
-        # {"name": "John Doe", "age": 30, "income": 0.5, "comment": None},  # assuming income is normalized to 0-1 scale
-        # {"name": "Jane Smith", "age": None, "income": 0.7, "comment": "Senior Analyst"}  # text fields are capitalized, missing age represented as None
-    # ]
-    """
-    forge = ComponentForge(
-        name=name,
-        component_type=ComponentType.FUNCTION,
-        description=dedent_and_strip(description),
-        usage_context=dedent_and_strip(usage_context),
-        top_k_variations=3,
-    )
-    print(forge.generate_variation())
+    assert (variation := forge_test.generate_variation())
+    print(variation)
 
 
 test_generate_variation()
