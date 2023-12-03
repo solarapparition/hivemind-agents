@@ -26,11 +26,10 @@ from typing import (
     Coroutine,
 )
 
-import langchain
 from langchain.schema import SystemMessage
-from langchain.cache import SQLiteCache
 from colorama import Fore
 
+from hivemind.config import configure_langchain_cache
 from hivemind.toolkit.models import super_creative_model, precise_model, query_model
 from hivemind.toolkit.text_extraction import ExtractionError, extract_blocks
 from hivemind.toolkit.text_formatting import dedent_and_strip
@@ -1385,15 +1384,6 @@ def default_human_base_capabilities() -> list["BaseCapability"]:
     return []
 
 
-def configure_llm_cache(cache_dir: Path) -> None:
-    """Configure the LLM cache."""
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    if not langchain.llm_cache:
-        langchain.llm_cache = SQLiteCache(
-            database_path=str(cache_dir / ".langchain.db")
-        )
-
-
 @dataclass
 class Aranea:
     """Main interfacing class for the agent."""
@@ -1413,7 +1403,7 @@ class Aranea:
 
     def __post_init__(self) -> None:
         """Post-initialization hook."""
-        configure_llm_cache(self.cache_dir)
+        configure_langchain_cache(self.cache_dir)
 
     @property
     def cache_dir(self) -> Path:
