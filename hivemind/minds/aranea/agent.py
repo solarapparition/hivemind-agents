@@ -1,5 +1,6 @@
 """Structure for Aranea agents."""
 
+import shelve
 import os
 import asyncio
 import contextlib
@@ -12,6 +13,7 @@ from uuid import uuid4 as generate_uuid
 from typing import (
     Iterable,
     Iterator,
+    MutableMapping,
     NewType,
     NamedTuple,
     Any,
@@ -34,7 +36,6 @@ from hivemind.toolkit.text_extraction import ExtractionError, extract_blocks
 from hivemind.toolkit.text_formatting import dedent_and_strip
 from hivemind.toolkit.yaml_tools import yaml
 from hivemind.toolkit.timestamp import utc_timestamp
-from hivemind.toolkit.types import HivemindReply
 
 BlueprintId = NewType("BlueprintId", str)
 TaskId = NewType("TaskId", str)
@@ -82,7 +83,7 @@ class Blueprint:
     task_history: TaskHistory
     reasoning: Reasoning
     knowledge: str
-    delegator: "Delegator"
+    recent_events_size: int
     id: BlueprintId = field(default_factory=lambda: generate_aranea_id(BlueprintId))
 
 
@@ -139,7 +140,8 @@ class Event:
     timestamp: str = field(default_factory=utc_timestamp)
 
     def __str__(self) -> str:
-        return f"[{self.timestamp}] {self.data}"
+        # return f"[{self.timestamp}] {self.data}"
+        return f"{self.data}"
 
     def to_str_with_pov(self, pov_id: RuntimeId) -> str:
         """String representation of the event with a point of view from a certain executor."""
@@ -154,10 +156,13 @@ class TaskValidator(Protocol):
         raise NotImplementedError
 
 
+@dataclass
 class Human:
     """A human part of the hivemind. Can be slotted into various specialized roles for tasks that the agent can't yet handle autonomously."""
 
     name: str = "Human"
+    reply_cache: MutableMapping[str, str] | None = None
+    thread: list[str] = field(default_factory=list)
 
     @property
     def id(self) -> RuntimeId:
@@ -181,10 +186,31 @@ class Human:
         feedback: str = input("Provide feedback: ")
         return TaskValidation(validation_result, feedback)
 
+    def respond_manually(self) -> str:
+        """Get manual response from the human."""
+        return input("Enter your response: ").strip()
+
+    def respond_using_cache(self, reply_cache: MutableMapping[str, str]) -> str:
+        """Get cached reply based on thread."""
+        if reply := reply_cache.get(str(self.thread)):
+            print(f"Cached reply found: {reply}")
+            return reply
+        if reply := self.respond_manually():
+            reply_cache.update({str(self.thread): reply})
+        return reply
+
     def advise(self, prompt: str) -> str:
         """Get input from the human."""
         print(prompt)
-        return input("Enter your response: ").strip()
+        self.thread.append(prompt)
+        self.thread.append(
+            reply := (
+                self.respond_using_cache(self.reply_cache)
+                if self.reply_cache is not None
+                else self.respond_manually()
+            )
+        )
+        return reply
 
 
 @dataclass
@@ -647,8 +673,15 @@ class Orchestrator:
     blueprint: Blueprint
     task: Task
     files_parent_dir: Path
+    delegator: "Delegator"
 
     _action_state: ActionStateName = ActionStateName.DEFAULT
+
+    @classmethod
+    @property
+    def default_recent_events_size(cls) -> int:
+        """Default size of recent events."""
+        return 10
 
     @property
     def id(self) -> RuntimeId:
@@ -838,6 +871,11 @@ class Orchestrator:
         raise NotImplementedError
 
     @property
+    def recent_events_size(self) -> int:
+        """Number of recent events to display."""
+        return self.blueprint.recent_events_size
+
+    @property
     def recent_event_status(self) -> str:
         """Status of recent events."""
         template = """
@@ -847,11 +885,10 @@ class Orchestrator:
         {event_log}
         ```end_of_recent_events_log
         """
-        events_to_show = 10
         return dedent_and_strip(template).format(
-            event_log=self.task.event_log.recent(events_to_show).to_str_with_pov(
-                self.id
-            ),
+            event_log=self.task.event_log.recent(
+                self.recent_events_size
+            ).to_str_with_pov(self.id),
         )
 
     @property
@@ -968,6 +1005,8 @@ class Orchestrator:
 
     def choose_action(self) -> ActionDecision:
         """Choose an action to perform."""
+        print(self.action_choice_context)
+        breakpoint()
         action_choice = query_model(
             model=precise_model,
             messages=[
@@ -1045,6 +1084,7 @@ class Orchestrator:
         #     "pause_subtask",
         #     "cancel_subtask",
         #     "resume_subtask",
+        # > need to add cancellation reason for cancelled tasks
 
     def message_from_owner(self, message: str) -> Event:
         """Create a message from the task owner."""
@@ -1101,6 +1141,7 @@ class Orchestrator:
         blueprint_location: Path,
         task: Task,
         files_parent_dir: Path,
+        delegator: "Delegator",
     ) -> Self:
         """Deserialize an Aranea orchestrator from a YAML file."""
         blueprint_data = yaml.load(blueprint_location)
@@ -1109,6 +1150,7 @@ class Orchestrator:
             blueprint=Blueprint(**blueprint_data),
             task=task,
             files_parent_dir=files_parent_dir,
+            delegator=delegator,
         )
 
 
@@ -1182,6 +1224,7 @@ class Delegator:
     executors_dir: Path
     bot_base_capabilities: Sequence[BaseCapability]
     human_base_capabilities: Sequence[BaseCapability]
+    advisor: Advisor
 
     def search_blueprints(
         self,
@@ -1231,7 +1274,6 @@ class Delegator:
 
     def map_base_capability(self, task: Task) -> BaseCapability | None:
         """Map a task to a base capability if possible."""
-        human = Human()
         base_capability_question = dedent_and_strip(
             """
             Is this task a base capability?
@@ -1244,7 +1286,9 @@ class Delegator:
             """
         ).format(task=task.description)
         is_base_capability = bool(
-            get_choice(base_capability_question, allowed_choices={0, 1}, advisor=human)
+            get_choice(
+                base_capability_question, allowed_choices={0, 1}, advisor=self.advisor
+            )
         )
         if not is_base_capability:
             return
@@ -1277,7 +1321,7 @@ class Delegator:
             get_choice(
                 capability_validation_question,
                 allowed_choices={0, 1},
-                advisor=human,
+                advisor=self.advisor,
             )
         )
         if is_correct:
@@ -1311,12 +1355,13 @@ class Delegator:
             task_history=[task.id],
             reasoning=Reasoning(),
             knowledge="",
-            delegator=self,
+            recent_events_size=Orchestrator.default_recent_events_size,
         )
         return Orchestrator(
             blueprint=blueprint,
             task=task,
             files_parent_dir=self.executors_dir,
+            delegator=self,
         )
 
 
@@ -1353,6 +1398,8 @@ class Aranea:
         default_factory=default_human_base_capabilities
     )
     """Base human capabilities that the agent can fall back to."""
+    base_capability_advisor: Advisor = field(default_factory=Human)
+    """Advisor for determining if some task is doable via a base capabilities."""
 
     def __post_init__(self) -> None:
         """Post-initialization hook."""
@@ -1372,7 +1419,10 @@ class Aranea:
     def delegator(self) -> Delegator:
         """Delegator for assigning tasks to executors."""
         return Delegator(
-            self.executors_dir, self.bot_base_capabilities, self.human_base_capabilities
+            self.executors_dir,
+            self.bot_base_capabilities,
+            self.human_base_capabilities,
+            advisor=self.base_capability_advisor,
         )
 
     @cached_property
@@ -1385,7 +1435,7 @@ class Aranea:
         """Name of the agent."""
         return f"Aranea_{self.id}"
 
-    async def run(self, message: str) -> HivemindReply:
+    async def run(self, message: str) -> Reply:
         """Run the agent with a message, and a way to continue the conversation. Rerunning this method starts a new conversation."""
         if not self.executors_dir.exists():
             self.executors_dir.mkdir(parents=True, exist_ok=True)
@@ -1416,12 +1466,15 @@ class Aranea:
 
 
 # ....
-# > set up test structure > add cache for human replies
+# in event log, replace agent ids with agent handles
+# > merge human vs bot capabilities—human execution time should be be enough of a penalty
 # > if a task is set to be complete, trigger validation agent automatically
-# > each time agent is rerun, its modified blueprint is saved separately
-# > next action execution > placeholder for `wait` action > every action has an output > event log for task also includes agent decisions and thoughts
-# > open interpreter
-# > need to add cancellation reason for cancelled tasks
+# > next action execution > placeholder for `wait` action > event log for task also includes agent decisions and thoughts
+# > every time event log fills up, extract updated info for main task description
+# knowledge learning: level of confidence about the knowledge # when updating knowledge, can add, subtract, update, or promote/demote knowledge
+# knowledge learning: must define terms
+# each time agent is rerun, its modified blueprint is saved separately
+
 
 """action choice
 {action_choice_reasoning} # attribute > reasoning step: think through what knowledge is relevant
@@ -1685,11 +1738,33 @@ def test_generate_extraction_reasoning() -> None:
     generate_extraction_reasoning(printout=True)
 
 
+def test_human_cache_response():
+    """Test human response."""
+
+    def ask_questions():
+        with shelve.open(str(cache_path), writeback=True) as cache:
+            human = Human(reply_cache=cache)
+            human.advise("What is your name?")
+            human.advise("What is your age?")
+
+    cache_path = Path(".data/test/test_human_reply_cache")
+    cache_path.unlink(missing_ok=True)
+    ask_questions()
+    ask_questions()
+    cache_path.unlink(missing_ok=True)
+
+
 async def test_full() -> None:
     """Run a full flow on an example task."""
-    aranea = Aranea(Path(".data/test/aranea"))
-    task = "Reorganize files on a flash drive"
-    await aranea.run(task)
+    with shelve.open(".data/test/aranea_human_reply_cache", writeback=True) as cache:
+        human_tester = Human(reply_cache=cache)
+        aranea = Aranea(
+            files_dir=Path(".data/test/aranea"), base_capability_advisor=human_tester
+        )
+        task = "Create an OpenAI assistant agent."
+        reply = (result := await aranea.run(task)).content
+        while human_reply := human_tester.advise(reply):
+            reply = await result.continue_conversation(human_reply)
 
 
 def test() -> None:
@@ -1701,6 +1776,7 @@ def test() -> None:
     # test_generate_reasoning()
     # test_default_action_reasoning()
     # test_generate_extraction_reasoning()
+    # test_human_cache_response()
     asyncio.run(test_full())
 
 
