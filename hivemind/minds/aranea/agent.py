@@ -45,7 +45,7 @@ IdTypeT = TypeVar("IdTypeT", BlueprintId, TaskId, EventId)
 
 AGENT_COLOR = Fore.MAGENTA
 VERBOSE = True
-
+NONE = "None"
 
 def generate_aranea_id(id_type: type[IdTypeT]) -> IdTypeT:
     """Generate an ID for an agent."""
@@ -101,7 +101,7 @@ class TaskWorkStatus(Enum):
 class TaskEventStatus(Enum):
     """Status of the events for a task."""
 
-    NONE = "none"
+    NONE = "None"
     AWAITING_EXECUTOR = "you are awaiting response from the subtask executor"
     AWAITING_OWNER = "the subtask executor is awaiting a response from you"
 
@@ -235,7 +235,7 @@ class TaskList:
         """String representation of the task list."""
         # if we're printing out the whole task list, assume these are subtasks
         return (
-            "\n".join([task.subtask_status_printout for task in self.tasks]) or "None"
+            "\n".join([task.subtask_status_printout for task in self.tasks]) or NONE
         )
 
     def __iter__(self) -> Iterator["Task"]:
@@ -272,7 +272,7 @@ class EventLog:
                 ]
             )
             if self.events
-            else "None"
+            else NONE
         )
 
     def recent(self, num_recent: int) -> Self:
@@ -762,7 +762,7 @@ class Orchestrator:
     @property
     def knowledge(self) -> str:
         """Learnings from past tasks."""
-        return self.blueprint.knowledge or "None"
+        return self.blueprint.knowledge or NONE
 
     @property
     def role(self) -> Role:
@@ -1481,6 +1481,7 @@ class Aranea:
 
 # add placeholder code for when event log fills up to 1/2
 # ....
+# > serialization for tasks
 # merge human vs bot capabilities—human execution time should be be enough of a penalty
 # > next action execution > placeholder for `wait` action > event log for task also includes agent decisions and thoughts
 # > if a task is set to be complete, trigger validation agent automatically
