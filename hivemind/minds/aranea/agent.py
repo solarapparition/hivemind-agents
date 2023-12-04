@@ -1265,8 +1265,7 @@ class Delegator:
     """Delegates tasks to executors, creating new ones if needed."""
 
     executors_dir: Path
-    bot_base_capabilities: Sequence[BaseCapability]
-    human_base_capabilities: Sequence[BaseCapability]
+    base_capabilities: Sequence[BaseCapability]
     advisor: Advisor
 
     def search_blueprints(
@@ -1338,7 +1337,7 @@ class Delegator:
 
         # now we know it's a base capability
         automapped_capability = automap_base_capability(
-            task, self.bot_base_capabilities
+            task, self.base_capabilities
         )
         capability_validation_question = dedent_and_strip(
             """
@@ -1413,25 +1412,16 @@ def default_bot_base_capabilities() -> list["BaseCapability"]:
     return []
 
 
-def default_human_base_capabilities() -> list["BaseCapability"]:
-    """Default base capabilities for humans."""
-    return []
-
-
 @dataclass
 class Aranea:
     """Main interfacing class for the agent."""
 
     files_dir: Path = Path(".data/aranea")
     """Directory for files related to the agent and any subagents."""
-    bot_base_capabilities: Sequence[BaseCapability] = field(
+    base_capabilities: Sequence[BaseCapability] = field(
         default_factory=default_bot_base_capabilities
     )
     """Base automated capabilities of the agent."""
-    human_base_capabilities: Sequence[BaseCapability] = field(
-        default_factory=default_human_base_capabilities
-    )
-    """Base human capabilities that the agent can fall back to."""
     base_capability_advisor: Advisor = field(default_factory=Human)
     """Advisor for determining if some task is doable via a base capabilities."""
 
@@ -1454,8 +1444,7 @@ class Aranea:
         """Delegator for assigning tasks to executors."""
         return Delegator(
             self.executors_dir,
-            self.bot_base_capabilities,
-            self.human_base_capabilities,
+            self.base_capabilities,
             advisor=self.base_capability_advisor,
         )
 
@@ -1499,9 +1488,8 @@ class Aranea:
         )
 
 
-# ....
-# > serialization for tasks
 # merge human vs bot capabilities—human execution time should be be enough of a penalty
+# ....
 # > next action execution > placeholder for `wait` action > event log for task also includes agent decisions and thoughts
 # > if a task is set to be complete, trigger validation agent automatically
 # knowledge learning: level of confidence about the knowledge # when updating knowledge, can add, subtract, update, or promote/demote knowledge
@@ -1755,8 +1743,7 @@ def test_default_action_reasoning() -> None:
             knowledge="Adaptations from past tasks.",
             delegator=Delegator(
                 executors_dir=TEST_DIR,
-                bot_base_capabilities=[],
-                human_base_capabilities=[],
+                base_capabilities=[],
             ),
         ),
         files_parent_dir=TEST_DIR,
@@ -1802,7 +1789,7 @@ async def test_full() -> None:
 
 def test() -> None:
     """Run tests."""
-    configure_llm_cache(Path(".cache"))
+    configure_langchain_cache(Path(".cache"))
     # test_serialize()
     # test_deserialize()
     # test_id_generation()
