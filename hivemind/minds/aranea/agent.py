@@ -47,6 +47,7 @@ AGENT_COLOR = Fore.MAGENTA
 VERBOSE = True
 NONE = "None"
 
+
 def generate_aranea_id(id_type: type[IdTypeT]) -> IdTypeT:
     """Generate an ID for an agent."""
     return id_type(f"{str(generate_uuid())}")
@@ -59,7 +60,7 @@ class TaskValidation(NamedTuple):
     feedback: str
 
 
-class RoleName(Enum):
+class Role(Enum):
     """Role of an agent."""
 
     ORCHESTRATOR = "orchestrator"
@@ -78,7 +79,7 @@ class Blueprint:
     """A blueprint for an Aranea agent."""
 
     name: str
-    role: RoleName
+    role: Role
     rank: int | None
     task_history: TaskHistory
     reasoning: Reasoning
@@ -234,9 +235,7 @@ class TaskList:
     def __str__(self) -> str:
         """String representation of the task list."""
         # if we're printing out the whole task list, assume these are subtasks
-        return (
-            "\n".join([task.subtask_status_printout for task in self.tasks]) or NONE
-        )
+        return "\n".join([task.subtask_status_printout for task in self.tasks]) or NONE
 
     def __iter__(self) -> Iterator["Task"]:
         """Iterate over the task list."""
@@ -491,10 +490,10 @@ ORCHESTRATOR_INFORMATION_SECTIONS = """
 
 
 def generate_action_reasoning(
-    role: RoleName, state: ExecutorState, actions: str, printout: bool = False
+    role: Role, state: ExecutorState, actions: str, printout: bool = False
 ) -> str:
     """Generate reasoning for choosing an action."""
-    if role == RoleName.ORCHESTRATOR and state == ExecutorState.DEFAULT:
+    if role == Role.ORCHESTRATOR and state == ExecutorState.DEFAULT:
         context = """
         ## MISSION:
         You are the instructor for an AI task orchestration agent. Your purpose is to provide step-by-step guidance for the agent to think through what it must do next.
@@ -765,7 +764,7 @@ class Orchestrator:
         return self.blueprint.knowledge or NONE
 
     @property
-    def role(self) -> RoleName:
+    def role(self) -> Role:
         """Role of the orchestrator."""
         return self.blueprint.role
 
@@ -899,6 +898,11 @@ class Orchestrator:
     def recent_events_size(self) -> int:
         """Number of recent events to display."""
         return self.blueprint.recent_events_size
+
+    @property
+    def state_update_frequency(self) -> int:
+        """How often to update the state of the task, in terms of new events."""
+        return max(1, int(self.recent_events_size / 2))
 
     @property
     def recent_event_status(self) -> str:
@@ -1129,15 +1133,31 @@ class Orchestrator:
             )
         )
 
+    _new_event_count = 0
+
+    def update_state_from_new_events(self) -> None:
+        """Update the state of the task from new events."""
+        raise NotImplementedError(
+            "This is where we update the main task description based on new events (such as info from main task owner."
+        )
+
+    def add_to_event_log(self, events: Sequence[Event]) -> None:
+        """Add events to the event log."""
+        self.task.event_log.add(events)
+        self._new_event_count += len(events)
+        if self._new_event_count >= self.state_update_frequency:
+            self.update_state_from_new_events()
+            self._new_event_count = 0
+
     async def execute(self, message: str | None = None) -> str:
         """Execute the task. Adds a message (if provided) to the task's event log, and adds own message to the event log at the end of execution."""
         if message is not None:
-            self.task.event_log.add([self.message_from_owner(message)])
+            self.add_to_event_log([self.message_from_owner(message)])
         while True:
             action_decision = self.choose_action()
             action_result = self.act(action_decision)
             if action_result.new_events:
-                self.task.event_log.add(action_result.new_events)
+                self.add_to_event_log(action_result.new_events)
             self.task.work_status = action_result.new_work_status
             self.task.event_status = action_result.new_event_status
             if action_result.pause_execution:
@@ -1373,7 +1393,7 @@ class Delegator:
         # now we know it's not a basic task that a simple bot can handle, so we must create an orchestrator
         blueprint = Blueprint(
             name=f"aranea_orchestrator_{task.id}",
-            role=RoleName.ORCHESTRATOR,
+            role=Role.ORCHESTRATOR,
             rank=None,
             task_history=[task.id],
             reasoning=Reasoning(),
@@ -1479,7 +1499,6 @@ class Aranea:
         )
 
 
-# add placeholder code for when event log fills up to 1/2
 # ....
 # > serialization for tasks
 # merge human vs bot capabilities—human execution time should be be enough of a penalty
@@ -1720,7 +1739,7 @@ def test_id_generation() -> None:
 def test_generate_reasoning() -> None:
     """Test generate_reasoning()."""
     assert generate_action_reasoning(
-        RoleName.ORCHESTRATOR, ExecutorState.DEFAULT, printout=True
+        Role.ORCHESTRATOR, ExecutorState.DEFAULT, printout=True
     )
 
 
@@ -1729,7 +1748,7 @@ def test_default_action_reasoning() -> None:
     orchestrator = Orchestrator(
         blueprint=Blueprint(
             name="Test blueprint",
-            role=RoleName.ORCHESTRATOR,
+            role=Role.ORCHESTRATOR,
             rank=0,
             task_history=TaskHistory(),
             reasoning=Reasoning(),
