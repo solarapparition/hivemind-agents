@@ -152,13 +152,23 @@ class ComponentForge(Generic[T]):
         assert component_generation_output is not None
         return Component(component_generation_output[0])
 
-    def validate(self) -> bool:
-        """Validate version ."""
-        raise NotImplementedError
+    def create_variation(self) -> None:
+        """Create a variation of the component, validate it, and add it to the variations list."""
+        variation = self.generate_variation()
 
-    def optimize(self) -> bool:
-        """Optimize the prompt."""
-        raise NotImplementedError
+
+
+
+
+
+        self.validate(variation)
+        breakpoint()
+        self.variations.add(variation)
+        # > only need to rank the top x variations
+        # > insert variation into appropriate place in variation list
+        # > variations is guaranteed to be sorted
+        # > able to learn usage context based on feedback items
+
 
 forge_test_name = "process_employee_data"
 forge_test_description = """
@@ -192,6 +202,7 @@ forge_test = ComponentForge[Callable[..., Any]](
     top_k_variations=3,
 )
 
+
 def test_generate_variation() -> None:
     """Test generate variation."""
     assert (variation := forge_test.generate_variation())
@@ -199,6 +210,9 @@ def test_generate_variation() -> None:
 
 
 test_generate_variation()
+
+breakpoint()
+# > remove caching
 
 # class PromptOptimizer:
 #     """Optimizer for a code component of some system."""
