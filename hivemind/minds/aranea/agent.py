@@ -38,9 +38,10 @@ from hivemind.toolkit.timestamp import utc_timestamp
 
 BlueprintId = NewType("BlueprintId", str)
 TaskId = NewType("TaskId", str)
+EventId = NewType("EventId", str)
 RuntimeId = NewType("RuntimeId", str)
 TaskHistory = list[TaskId]
-IdTypeT = TypeVar("IdTypeT", BlueprintId, TaskId)
+IdTypeT = TypeVar("IdTypeT", BlueprintId, TaskId, EventId)
 
 AGENT_COLOR = Fore.MAGENTA
 VERBOSE = True
@@ -137,6 +138,7 @@ class Event:
 
     data: EventData
     timestamp: str = field(default_factory=utc_timestamp)
+    id: EventId = field(default_factory=lambda: generate_aranea_id(EventId))
 
     def __str__(self) -> str:
         # return f"[{self.timestamp}] {self.data}"
@@ -148,6 +150,14 @@ class Event:
         """String representation of the event with a point of view from a certain executor."""
         event_printout = replace_agent_id(str(self), "You", pov_id)
         return replace_agent_id(event_printout, other_name, other_id)
+
+    def serialize(self) -> dict[str, Any]:
+        """Serialize the event."""
+        return asdict(self)
+
+    def __repr__(self) -> str:
+        """String representation of the event."""
+        return str(self.serialize())
 
 
 class TaskValidator(Protocol):
@@ -869,6 +879,10 @@ class Orchestrator:
         """Serialize the orchestrator to a dict."""
         return asdict(self.blueprint)
 
+    def __repr__(self) -> str:
+        """Full representation of the orchestrator."""
+        return repr(self.serialize())
+
     def save(self, update_blueprint: bool = True) -> None:
         """Serialize the orchestrator to YAML."""
         if update_blueprint:
@@ -1465,8 +1479,8 @@ class Aranea:
         )
 
 
+# add placeholder code for when event log fills up to 1/2
 # ....
-# add placeholder code for when event log fills up
 # merge human vs bot capabilities—human execution time should be be enough of a penalty
 # > next action execution > placeholder for `wait` action > event log for task also includes agent decisions and thoughts
 # > if a task is set to be complete, trigger validation agent automatically
