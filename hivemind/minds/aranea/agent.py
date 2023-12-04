@@ -59,7 +59,7 @@ class TaskValidation(NamedTuple):
     feedback: str
 
 
-class Role(Enum):
+class RoleName(Enum):
     """Role of an agent."""
 
     ORCHESTRATOR = "orchestrator"
@@ -78,7 +78,7 @@ class Blueprint:
     """A blueprint for an Aranea agent."""
 
     name: str
-    role: Role
+    role: RoleName
     rank: int | None
     task_history: TaskHistory
     reasoning: Reasoning
@@ -491,10 +491,10 @@ ORCHESTRATOR_INFORMATION_SECTIONS = """
 
 
 def generate_action_reasoning(
-    role: Role, state: ExecutorState, actions: str, printout: bool = False
+    role: RoleName, state: ExecutorState, actions: str, printout: bool = False
 ) -> str:
     """Generate reasoning for choosing an action."""
-    if role == Role.ORCHESTRATOR and state == ExecutorState.DEFAULT:
+    if role == RoleName.ORCHESTRATOR and state == ExecutorState.DEFAULT:
         context = """
         ## MISSION:
         You are the instructor for an AI task orchestration agent. Your purpose is to provide step-by-step guidance for the agent to think through what it must do next.
@@ -765,7 +765,7 @@ class Orchestrator:
         return self.blueprint.knowledge or NONE
 
     @property
-    def role(self) -> Role:
+    def role(self) -> RoleName:
         """Role of the orchestrator."""
         return self.blueprint.role
 
@@ -1373,7 +1373,7 @@ class Delegator:
         # now we know it's not a basic task that a simple bot can handle, so we must create an orchestrator
         blueprint = Blueprint(
             name=f"aranea_orchestrator_{task.id}",
-            role=Role.ORCHESTRATOR,
+            role=RoleName.ORCHESTRATOR,
             rank=None,
             task_history=[task.id],
             reasoning=Reasoning(),
@@ -1720,7 +1720,7 @@ def test_id_generation() -> None:
 def test_generate_reasoning() -> None:
     """Test generate_reasoning()."""
     assert generate_action_reasoning(
-        Role.ORCHESTRATOR, ExecutorState.DEFAULT, printout=True
+        RoleName.ORCHESTRATOR, ExecutorState.DEFAULT, printout=True
     )
 
 
@@ -1729,7 +1729,7 @@ def test_default_action_reasoning() -> None:
     orchestrator = Orchestrator(
         blueprint=Blueprint(
             name="Test blueprint",
-            role=Role.ORCHESTRATOR,
+            role=RoleName.ORCHESTRATOR,
             rank=0,
             task_history=TaskHistory(),
             reasoning=Reasoning(),
