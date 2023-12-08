@@ -1514,18 +1514,19 @@ class Delegator:
         """Map a task to a base capability if possible."""
         base_capability_question = dedent_and_strip(
             """
-            Is this task a base capability?
+            Evaluate this task:
             ```
             {task}
             ```
             
-            0: No.
-            1: Yes.
+            Is this task a base capability, i.e. something that one of our bots can handle, OR a human can do in a few minutes? (y/n)
             """
         ).format(task=task.description)
         is_base_capability = bool(
             get_choice(
-                base_capability_question, allowed_choices={0, 1}, advisor=self.advisor
+                base_capability_question,
+                allowed_choices={"y", "n"},
+                advisor=self.advisor,
             )
         )
         if not is_base_capability:
