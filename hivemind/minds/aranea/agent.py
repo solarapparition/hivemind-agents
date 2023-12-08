@@ -26,7 +26,7 @@ from typing import (
     Coroutine,
 )
 
-from langchain.schema import SystemMessage
+from langchain.schema import SystemMessage, BaseMessage
 from colorama import Fore
 
 from hivemind.config import configure_langchain_cache
@@ -47,6 +47,13 @@ AGENT_COLOR = Fore.MAGENTA
 VERBOSE = True
 MAIN_TASK_OWNER = "MAIN TASK OWNER"
 NONE = "None"
+
+
+def print_messages(messages: Sequence[BaseMessage]) -> str:
+    """Print LangChain messages."""
+    return "\n\n---\n\n".join(
+        [f"[{message.type.upper()}]:\n\n{message.content}" for message in messages]
+    )
 
 
 def generate_aranea_id(id_type: type[IdTypeT]) -> IdTypeT:
@@ -449,7 +456,9 @@ class CoreState:
         delegated_subtasks = str(
             self.subtasks.filter_by_status(TaskWorkStatus.IN_PROGRESS)
         )
-        new_subtasks = str(self.subtasks.filter_by_status(TaskWorkStatus.IDENTIFIED))
+        identified_subtasks = str(
+            self.subtasks.filter_by_status(TaskWorkStatus.IDENTIFIED)
+        )
         blocked_subtasks = str(self.subtasks.filter_by_status(TaskWorkStatus.BLOCKED))
         return dedent_and_strip(self.template).format(
             knowledge=self.knowledge,
@@ -458,7 +467,7 @@ class CoreState:
             cancelled_subtasks=cancelled_subtasks,
             in_validation_subtasks=in_validation_subtasks,
             delegated_subtasks=delegated_subtasks,
-            new_subtasks=new_subtasks,
+            identified_subtasks=identified_subtasks,
             blocked_subtasks=blocked_subtasks,
         )
 
@@ -477,12 +486,12 @@ ORCHESTRATOR_CONCEPTS = f"""
 - MAIN TASK: the main task that the orchestrator is responsible for managing, which it does by identifying subtasks and providing support for specialized executor agents for the subtasks.
 - SUBTASK: a task that must be executed in order to complete the main task. The orchestrator does NOT execute subtasks itself; instead, it facilitates the resolution of subtasks by making high-level decisions regarding each subtask in the context of the overall task and providing support for the subtask executors.
 - SUBTASK STATUS: the status of subtasks that have already been identified. The status of a subtask can be one of the following:
-    - {TaskWorkStatus.IDENTIFIED.value}: the subtask has been newly identified and has not started execution yet.
-    - {TaskWorkStatus.BLOCKED.value}: the subtask is blocked by some issue, and execution cannot continue until the issue is resolved, typically by discussing the blocker and/or identifying a new subtask to resolve the blocker.
-    - {TaskWorkStatus.IN_PROGRESS.value}: the subtask is currently being executed by a subtask executor.
-    - {TaskWorkStatus.IN_VALIDATION.value}: the subtask has been reported as completed by its executor, but is still being validated by a validator. Validation happens automatically and does not require or action from the orchestrator.
-    - {TaskWorkStatus.COMPLETED.value}: the subtask has been validated as complete by a validator. Completed subtasks provide a record of overall successful progress for the main task.
-    - {TaskWorkStatus.CANCELLED.value}: the subtask has been cancelled for various reason and will not be done.
+  - {TaskWorkStatus.IDENTIFIED.value}: the subtask has been newly identified and has not started execution yet.
+  - {TaskWorkStatus.BLOCKED.value}: the subtask is blocked by some issue, and execution cannot continue until the issue is resolved, typically by discussing the blocker and/or identifying a new subtask to resolve the blocker.
+  - {TaskWorkStatus.IN_PROGRESS.value}: the subtask is currently being executed by a subtask executor.
+  - {TaskWorkStatus.IN_VALIDATION.value}: the subtask has been reported as completed by its executor, but is still being validated by a validator. Validation happens automatically and does not require or action from the orchestrator.
+  - {TaskWorkStatus.COMPLETED.value}: the subtask has been validated as complete by a validator. Completed subtasks provide a record of overall successful progress for the main task.
+  - {TaskWorkStatus.CANCELLED.value}: the subtask has been cancelled for various reason and will not be done.
 - SUBTASK EXECUTOR: an agent that is responsible for executing a subtask. Subtask executors specialize in executing certain types of tasks; whenever a subtask is identified, an executor is automatically assigned to it without any action required from the orchestrator.
 - {MAIN_TASK_OWNER}: the one who requested the main task to be done. The orchestrator must communicate with the task owner to gather background information required to complete the main task.
 """.strip()
@@ -572,7 +581,7 @@ def generate_action_reasoning(
         ]
         return query_and_extract_reasoning(
             messages,
-            preamble=f"Generating reasoning for {role.value} in {state.value} state...",
+            preamble=f"Generating reasoning for {role.value} in {state.value} state...\n{print_messages(messages)}",
             printout=printout,
         )
     raise NotImplementedError
@@ -625,7 +634,7 @@ def generate_subtask_extraction_reasoning(printout: bool = False) -> str:
     ]
     return query_and_extract_reasoning(
         messages,
-        preamble="Generating subtask extraction reasoning...",
+        preamble=f"Generating subtask extraction reasoning...\n{print_messages(messages)}",
         printout=printout,
     )
 
@@ -775,20 +784,20 @@ class Orchestrator:
     @property
     def core_template(self) -> str:
         """Template for the core state."""
-        template = """
+        template = f"""
         ## MISSION:
         You are an advanced task orchestrator that specializes in managing the execution of a MAIN TASK and delegating its SUBTASKS to EXECUTORS that can execute those tasks, while communicating with the MAIN TASK OWNER to gather required information for the task. Your overall purpose is to facilitate task execution by communicating with both the MAIN TASK OWNER and SUBTASK EXECUTORS to complete the MAIN TASK as efficiently as possible.
 
         ## KNOWLEDGE:
         In addition to the general background knowledge of your language model, you have the following, more specialized knowledge that may be relevant to the task at hand:
         ```start_of_knowledge
-        {knowledge}
+        {{knowledge}}
         ```end_of_knowledge
 
         ## MAIN TASK DESCRIPTION:
         Here is information about the main task you are currently working on:
         ```start_of_main_task_description
-        {task_specification}
+        {{task_specification}}
         ```end_of_main_task_description
 
         ## SUBTASKS:
@@ -798,40 +807,40 @@ class Orchestrator:
         - In contrast, tasks that are NEW or BLOCKED will need action from you to start/continue execution.
         - This is not an exhaustive list of all required subtasks for the main task; you may discover additional subtasks that must be done to complete the main task.
 
-        ### SUBTASKS (COMPLETED):
+        ### SUBTASKS ({TaskWorkStatus.COMPLETED.value}):
         These tasks have been reported as completed, and validated as such by the validator; use this section as a reference for progress in the main task.
         ```start_of_completed_subtasks
-        {completed_subtasks}
+        {{completed_subtasks}}
         ```end_of_completed_subtasks
 
-        ### SUBTASKS (CANCELLED):
+        ### SUBTASKS ({TaskWorkStatus.CANCELLED.value}):
         You have previously cancelled these subtasks for various reason and they will not be done.
         ```start_of_cancelled_subtasks
-        {cancelled_subtasks}
+        {{cancelled_subtasks}}
         ```end_of_cancelled_subtasks
 
-        ### SUBTASKS (IN_VALIDATION):
+        ### SUBTASKS ({TaskWorkStatus.IN_VALIDATION.value}):
         These subtasks have been reported as completed by executors, but are still being validated by validators.
         ```start_of_in_validation_subtasks
-        {in_validation_subtasks}
+        {{in_validation_subtasks}}
         ```end_of_in_validation_subtasks
 
-        ### SUBTASKS (IN_PROGRESS):
+        ### SUBTASKS ({TaskWorkStatus.IN_PROGRESS.value}):
         These are subtasks that you have delegated to other executors and that are currently being executed by them.
         ```start_of_delegated_subtasks
-        {delegated_subtasks}
+        {{delegated_subtasks}}
         ```end_of_delegated_subtasks
 
-        ### SUBTASKS (NEW):
+        ### SUBTASKS ({TaskWorkStatus.IDENTIFIED.value}):
         These subtasks are newly identified and not yet begun.
-        ```start_of_new_subtasks
-        {new_subtasks}
-        ```end_of_new_subtasks
+        ```start_of_identified_subtasks
+        {{identified_subtasks}}
+        ```end_of_identified_subtasks
 
-        ### SUBTASKS (BLOCKED):
+        ### SUBTASKS ({TaskWorkStatus.BLOCKED.value}):
         These subtasks are blocked by some issue, and execution cannot continue until the issue is resolved, typically by discussing the blocker and/or creating a new subtask to resolve the blocker.
         ```start_of_blocked_subtasks
-        {blocked_subtasks}
+        {{blocked_subtasks}}
         ```end_of_blocked_subtasks
         """
         return dedent_and_strip(template)
@@ -1033,13 +1042,14 @@ class Orchestrator:
 
     def choose_action(self) -> ActionDecision:
         """Choose an action to perform."""
+        messages = [
+            SystemMessage(content=self.action_choice_context),
+            SystemMessage(content=self.action_choice_reasoning),
+        ]
         action_choice = query_model(
             model=precise_model,
-            messages=[
-                SystemMessage(content=self.action_choice_context),
-                SystemMessage(content=self.action_choice_reasoning),
-            ],
-            preamble="Choosing next action...",
+            messages=messages,
+            preamble=f"Choosing next action...\n{print_messages(messages)}",
             color=AGENT_COLOR,
         )
         if not (
@@ -1207,13 +1217,14 @@ class Orchestrator:
 
     def identify_new_subtask(self) -> ActionResult:
         """Identify a new subtask."""
+        messages = [
+            SystemMessage(content=self.subtask_extraction_context),
+            SystemMessage(content=self.subtask_extraction_reasoning),
+        ]
         new_subtask = query_model(
             model=precise_model,
-            messages=[
-                SystemMessage(content=self.subtask_extraction_context),
-                SystemMessage(content=self.subtask_extraction_reasoning),
-            ],
-            preamble="Extracting subtask...",
+            messages=messages,
+            preamble=f"Extracting subtask...\n{print_messages(messages)}",
             color=AGENT_COLOR,
         )
         extracted_subtask = extract_blocks(
@@ -1251,17 +1262,16 @@ class Orchestrator:
 
     def act(self, decision: ActionDecision) -> ActionResult:
         """Act on a decision."""
-
         decision.validate_action(valid_actions=self.default_action_names)
         if decision.action_name == ActionName.MESSAGE_TASK_OWNER.value:
             return self.message_task_owner(decision.action_args["message"])
         if decision.action_name == ActionName.IDENTIFY_NEW_SUBTASK.value:
             return self.identify_new_subtask()
 
-        # > fix identified/new status
-        # > fix subtask indentation for reasoning generation
-        # > fix subtask status insertion into default action prompt
-        breakpoint()  # print(*(message.content for message in messages), sep="\n\n---\n\n")
+        breakpoint()
+        # > convert to y/n
+        # > start_subtask > open up subtask discussion mode > preset message when subtask is newly identified # warn of missing context
+        breakpoint()
         # "extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
         # "discuss_with_agent",
         #     # these are all options for individual discussion messages
