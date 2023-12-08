@@ -45,6 +45,7 @@ IdTypeT = TypeVar("IdTypeT", BlueprintId, TaskId, EventId)
 
 AGENT_COLOR = Fore.MAGENTA
 VERBOSE = True
+MAIN_TASK_OWNER = "MAIN TASK OWNER"
 NONE = "None"
 
 
@@ -53,10 +54,10 @@ def generate_aranea_id(id_type: type[IdTypeT]) -> IdTypeT:
     return id_type(f"{str(generate_uuid())}")
 
 
-class TaskValidation(NamedTuple):
+class ValidationResult(NamedTuple):
     """Validation of work done by agent."""
 
-    result: bool
+    valid: bool
     feedback: str
 
 
@@ -72,6 +73,7 @@ class Reasoning:
     """Reasoning instructions for an agent."""
 
     default_action_choice: str | None = None
+    subtask_extraction: str | None = None
 
 
 @dataclass
@@ -122,15 +124,28 @@ def replace_agent_id(
 class MessageData:
     """Data for a message."""
 
-    sender: str
-    recipient: str
+    sender: RuntimeId
+    recipient: RuntimeId
     content: str
 
     def __str__(self) -> str:
         return f"{self.sender} (to {self.recipient}): {self.content}"
 
 
-EventData = MessageData
+@dataclass(frozen=True)
+class SubtaskIdentificationData:
+    """Data for identifying a subtask."""
+
+    subtask: str
+    validation_result: ValidationResult
+
+    def __str__(self) -> str:
+        if self.validation_result.valid:
+            return f"Successfully identified subtask: `{self.subtask}`"
+        return f'Attempted to identify subtask `{self.subtask}`, but the validator did not approve the subtask, with the following feedback: "{self.validation_result.feedback}"'
+
+
+EventData = MessageData | SubtaskIdentificationData
 
 
 @dataclass
@@ -161,10 +176,10 @@ class Event:
         return str(self.serialize())
 
 
-class TaskValidator(Protocol):
+class WorkValidator(Protocol):
     """A validator of a task."""
 
-    def validate(self, task: "Task") -> TaskValidation:
+    def validate(self, prompt: str) -> ValidationResult:
         """Validate the work done by an executor for a task."""
         raise NotImplementedError
 
@@ -181,23 +196,6 @@ class Human:
     def id(self) -> RuntimeId:
         """Runtime id of the human."""
         return RuntimeId(self.name)
-
-    def validate(self, task: "Task") -> TaskValidation:
-        """Validate the work done by an executor."""
-        print(f'Please validate the following task:\n"{str(task)}"')
-        while True:
-            validation_input: str = (
-                input("Was the task successfully completed? (True/False): ")
-                .strip()
-                .lower()
-            )
-            if validation_input in {"true", "false"}:
-                validation_result: bool = validation_input == "true"
-                break
-            print("Invalid input. Please enter 'True' or 'False'.")
-
-        feedback: str = input("Provide feedback: ")
-        return TaskValidation(validation_result, feedback)
 
     def respond_manually(self) -> str:
         """Get manual response from the human."""
@@ -225,26 +223,38 @@ class Human:
         )
         return reply
 
+    def validate(self, prompt: str) -> ValidationResult:
+        """Validate the work done by an executor."""
+        prompt += "\n\nPlease validate the work as described above (y/n): "
+        while True:
+            validation_input: str = self.advise(prompt).strip().lower()
+            if validation_input in {"y", "n"}:
+                validated: bool = validation_input == "y"
+                break
+            print("Invalid input. Please enter 'y' or 'n'.")
+        feedback: str = "" if validated else self.advise("Provide feedback: ")
+        return ValidationResult(validated, feedback)
+
 
 @dataclass
 class TaskList:
     """A list of tasks and their managment functionality."""
 
-    tasks: list["Task"] = field(default_factory=list)
+    items: list["Task"] = field(default_factory=list)
 
     def __str__(self) -> str:
         """String representation of the task list."""
         # if we're printing out the whole task list, assume these are subtasks
-        return "\n".join([task.subtask_status_printout for task in self.tasks]) or NONE
+        return "\n".join([task.subtask_status_printout for task in self.items]) or NONE
 
     def __iter__(self) -> Iterator["Task"]:
         """Iterate over the task list."""
-        return iter(self.tasks)
+        return iter(self.items)
 
     def filter_by_status(self, status: TaskWorkStatus) -> Self:
         """Filter the task list by status."""
         return TaskList(
-            tasks=[task for task in self.tasks if task.work_status == status]
+            items=[task for task in self.items if task.work_status == status]
         )
 
 
@@ -339,8 +349,11 @@ class Task:
     description: TaskDescription
     owner_id: RuntimeId
     rank_limit: int | None
+    validator: WorkValidator
     name: str | None = None
-    validator: TaskValidator = field(default_factory=Human)
+    # validator: WorkValidator = field(
+    #     default_factory=lambda: Human(name="Human Validator")
+    # )
     id: TaskId = field(default_factory=lambda: generate_aranea_id(TaskId))
     executor: Executor | None = None
     notes: dict[str, str] = field(default_factory=dict)
@@ -356,10 +369,6 @@ class Task:
     def subtasks(self) -> TaskList:
         """Subtasks of the task."""
         return TaskList()
-
-    def validate(self) -> TaskValidation:
-        """Validate the work done by the executor."""
-        return self.validator.validate(self)
 
     @property
     def main_status_printout(self) -> str:
@@ -405,14 +414,14 @@ class Task:
         template = """
         Id: {id}
         Name: {name}
-        Work Status: {status}
+        Work Status: {work_status}
         Event Status: {event_status}
         """
         return dedent_and_strip(template).format(
             id=self.id,
             name=self.name,
-            work_status=self.work_status,
-            event_status=self.event_status,
+            work_status=self.work_status.value,
+            event_status=self.event_status.value,
         )
 
 
@@ -425,7 +434,6 @@ class CoreState:
     main_task: Task
     subtasks: TaskList
     template: str
-    events: EventLog
 
     def __str__(self) -> str:
         """String representation of the core state."""
@@ -464,8 +472,6 @@ class ActionName(Enum):
     REPORT_MAIN_TASK_COMPLETE = "REPORT_MAIN_TASK_COMPLETE"
 
 
-MAIN_TASK_OWNER = "MAIN TASK OWNER"
-
 ORCHESTRATOR_CONCEPTS = f"""
 - ORCHESTRATOR: the agent that is responsible for managing the execution of a main task and managing the statuses of its subtasks, while communicating with the task's owner to gather required information for the task. The orchestrator must communicate with both the task owner and subtask executors to complete the main task as efficiently as possible.
 - MAIN TASK: the main task that the orchestrator is responsible for managing, which it does by identifying subtasks and providing support for specialized executor agents for the subtasks.
@@ -479,14 +485,47 @@ ORCHESTRATOR_CONCEPTS = f"""
     - {TaskWorkStatus.CANCELLED.value}: the subtask has been cancelled for various reason and will not be done.
 - SUBTASK EXECUTOR: an agent that is responsible for executing a subtask. Subtask executors specialize in executing certain types of tasks; whenever a subtask is identified, an executor is automatically assigned to it without any action required from the orchestrator.
 - {MAIN_TASK_OWNER}: the one who requested the main task to be done. The orchestrator must communicate with the task owner to gather background information required to complete the main task.
-"""
+""".strip()
 
 ORCHESTRATOR_INFORMATION_SECTIONS = """
 - KNOWLEDGE: background knowledge relating to the orchestrator's area of specialization. The information may or may not be relevant to the specific main task, but is provided as support for the orchestrator's decisionmaking.
 - MAIN TASK DESCRIPTION: a description of all information about the main task that the orchestrator has learned so far from the task owner. This may NOT be a complete description of the main task, so the orchestrator must always take into account if there is enough information for performing its actions.
 - SUBTASKS: a list of all subtasks that have been extracted by the orchestrator so far; for each one, there is a high-level description of what must be done, as well as the subtask's status. This is not an exhaustive list of all required subtasks for the main task; there may be additional subtasks that are required. This list is automatically maintained and updated by a background process.
 - RECENT EVENTS LOG: a log of recent events that have occurred during the execution of the task. This can include status updates for subtasks, messages from the task owner, and the orchestrator's own previous thoughts/decisions
-"""
+""".strip()
+
+
+def query_and_extract_reasoning(
+    messages: Sequence[SystemMessage], preamble: str, printout: bool
+) -> str:
+    """Query the model and extract the reasoning process."""
+    if printout:
+        result = query_model(
+            model=super_creative_model,
+            messages=messages,
+            preamble=preamble,
+            color=AGENT_COLOR,
+            printout=printout,
+        )
+    else:
+        result = query_model(
+            model=super_creative_model,
+            messages=messages,
+            printout=printout,
+        )
+    if not (extracted_result := extract_blocks(result, "start_of_reasoning_process")):
+        raise ExtractionError("Could not extract reasoning process from the result.")
+    return extracted_result[0]
+
+
+BASE_ORCHESTRATOR_INFO = f"""
+## CONCEPTS:
+{ORCHESTRATOR_CONCEPTS}
+
+## ORCHESTRATOR INFORMATION SECTIONS:
+By default, the orchestrator has access to the following information. Note that all information here is read-only; while identifying new subtasks, the orchestrator cannot modify any of the information here.
+{ORCHESTRATOR_INFORMATION_SECTIONS}
+""".strip()
 
 
 def generate_action_reasoning(
@@ -498,13 +537,7 @@ def generate_action_reasoning(
         ## MISSION:
         You are the instructor for an AI task orchestration agent. Your purpose is to provide step-by-step guidance for the agent to think through what it must do next.
 
-        ## CONCEPTS:
-        The following are some concepts that are relevant to your role as an instructor:
-        {concepts}
-
-        ## ORCHESTRATOR INFORMATION SECTIONS:
-        By default, the orchestrator has access to the following:
-        {information_sections}
+        {base_info}
 
         ## ORCHESTRATOR ACTIONS:
         In its default state, the orchestrator can perform the following actions:
@@ -531,54 +564,37 @@ def generate_action_reasoning(
         messages = [
             SystemMessage(
                 content=dedent_and_strip(context).format(
+                    base_info=BASE_ORCHESTRATOR_INFO,
                     actions=actions,
-                    concepts=ORCHESTRATOR_CONCEPTS,
-                    information_sections=ORCHESTRATOR_INFORMATION_SECTIONS,
                 )
             ),
             SystemMessage(content=dedent_and_strip(request)),
         ]
-        if printout:
-            result = query_model(
-                model=super_creative_model,
-                messages=messages,
-                preamble=f"Generating reasoning for {role.value} in {state.value} state...",
-                color=AGENT_COLOR,
-                printout=printout,
-            )
-        else:
-            result = query_model(
-                model=super_creative_model,
-                messages=messages,
-                printout=printout,
-            )
-        if not (
-            extracted_result := extract_blocks(result, "start_of_reasoning_process")
-        ):
-            raise ExtractionError(
-                "Could not extract reasoning process from the result."
-            )
-        return extracted_result[0]
+        return query_and_extract_reasoning(
+            messages,
+            preamble=f"Generating reasoning for {role.value} in {state.value} state...",
+            printout=printout,
+        )
     raise NotImplementedError
 
 
-def generate_extraction_reasoning(printout: bool = False) -> str:
+MODULAR_SUBTASK_IDENTIFICATION = """
+"Modular Subtask Identification" (MSI) is a philosophy for identifying a required subtask from a main task that emphasizes two principles:
+- orthogonality: the identified subtask is as independent from the rest of the uncompleted main task as possible. This allows it to be executed in isolation without requiring any other subtasks to be completed first.
+- small input/output footprint: the identified subtask has a small input and output footprint, meaning that it requires little information to be provided to it, and provides compact output. This reduces the amount of context needed to understand the subtask and its results.
+""".strip()
+
+
+def generate_subtask_extraction_reasoning(printout: bool = False) -> str:
     """Generate reasoning for choosing an action."""
     context = """
     ## MISSION:
     You are the instructor for an AI task orchestration agent. Your purpose is to provide step-by-step guidance for the agent to think through how to identify the next subtask from the main task description.
 
-    ## CONCEPTS:
-    {concepts}
+    {base_info}
 
-    ## ORCHESTRATOR INFORMATION SECTIONS:
-    By default, the orchestrator has access to the following information. Note that all information here is read-only; while identifying new subtasks, the orchestrator cannot modify any of the information here.
-    {information_sections}
-
-    ## MODULAR SUBTASK INDENTIFICATION PHILOSOPHY
-    "Modular Subtask Identification" (MSI) is a philosophy for identifying a required subtask from a main task that emphasizes two principles:
-    - orthogonality: the identified subtask is as independent from the rest of the uncompleted main task as possible. This allows it to be executed in isolation without requiring any other subtasks to be completed first.
-    - small input/output footprint: the identified subtask has a small input and output footprint, meaning that it requires little information to be provided to it, and provides compact output. This reduces the amount of context needed to understand the subtask and its results.
+    ## MODULAR SUBTASK INDENTIFICATION PHILOSOPHY:
+    {msi}
 
     """
     request = """
@@ -601,29 +617,17 @@ def generate_extraction_reasoning(printout: bool = False) -> str:
     messages = [
         SystemMessage(
             content=dedent_and_strip(context).format(
-                concepts=ORCHESTRATOR_CONCEPTS,
-                information_sections=ORCHESTRATOR_INFORMATION_SECTIONS,
+                base_info=BASE_ORCHESTRATOR_INFO,
+                msi=MODULAR_SUBTASK_IDENTIFICATION,
             )
         ),
         SystemMessage(content=dedent_and_strip(request)),
     ]
-    if printout:
-        result = query_model(
-            model=super_creative_model,
-            messages=messages,
-            preamble="Generating extraction reasoning...",
-            color=AGENT_COLOR,
-            printout=printout,
-        )
-    else:
-        result = query_model(
-            model=super_creative_model,
-            messages=messages,
-            printout=printout,
-        )
-    if not (extracted_result := extract_blocks(result, "start_of_reasoning_process")):
-        raise ExtractionError("Could not extract reasoning process from the result.")
-    return extracted_result[0]
+    return query_and_extract_reasoning(
+        messages,
+        preamble="Generating subtask extraction reasoning...",
+        printout=printout,
+    )
 
 
 @dataclass(frozen=True)
@@ -682,8 +686,8 @@ class ActionResult:
 
     pause_execution: PauseExecution
     new_events: list[Event]
-    new_work_status: TaskWorkStatus
-    new_event_status: TaskEventStatus
+    new_work_status: TaskWorkStatus | None = None
+    new_event_status: TaskEventStatus | None = None
 
 
 @dataclass
@@ -841,7 +845,6 @@ class Orchestrator:
             main_task=self.task,
             subtasks=self.task.subtasks,
             template=self.core_template,
-            events=self.task.event_log,
         )
 
     @property
@@ -877,10 +880,6 @@ class Orchestrator:
     def serialize(self) -> dict[str, Any]:
         """Serialize the orchestrator to a dict."""
         return asdict(self.blueprint)
-
-    def __repr__(self) -> str:
-        """Full representation of the orchestrator."""
-        return repr(self.serialize())
 
     def save(self, update_blueprint: bool = True) -> None:
         """Serialize the orchestrator to YAML."""
@@ -1040,7 +1039,7 @@ class Orchestrator:
                 SystemMessage(content=self.action_choice_context),
                 SystemMessage(content=self.action_choice_reasoning),
             ],
-            preamble="Generating action choice...",
+            preamble="Choosing next action...",
             color=AGENT_COLOR,
         )
         if not (
@@ -1070,27 +1069,185 @@ class Orchestrator:
             new_work_status=TaskWorkStatus.BLOCKED,
             new_event_status=TaskEventStatus.AWAITING_OWNER,
         )
-        # > self.events.append
+
+    @property
+    def subtask_extraction_context(self) -> str:
+        """Context for extracting a subtask."""
+        template = """
+        {default_status}
+
+        ## MODULAR SUBTASK IDENTIFICATION PHILOSOPHY (MSI):
+        {msi}
+        """
+        return dedent_and_strip(template).format(
+            default_status=self.default_status,
+            msi=MODULAR_SUBTASK_IDENTIFICATION,
+        )
 
     @property
     def subtask_extraction_reasoning(self) -> str:
         """Prompt for extracting a subtask."""
-        breakpoint()
         if not self.blueprint.reasoning.subtask_extraction:
-            self.blueprint.reasoning.subtask_extraction = generate_extraction_reasoning(
-                printout=VERBOSE
+            self.blueprint.reasoning.subtask_extraction = (
+                generate_subtask_extraction_reasoning(printout=VERBOSE)
             )
-        return self.blueprint.reasoning.subtask_extraction
+        template = """
+        Use the following reasoning process to decide what to do next:
+        ```start_of_reasoning_steps
+        {subtask_extraction_core}
+        ```end_of_reasoning_steps
 
-    def identify_new_subtask(self) -> PauseExecution:
+        In your reply, you must include output from all steps of the reasoning process, in this block format:
+        ```start_of_reasoning_output
+        1. {{step_1_output}}
+        2. {{step_2_output}}
+        3. [... etc.]
+        ```end_of_reasoning_output
+        After this block, you must include the subtask you have identified. Here, the identified subtask becomes a new MAIN TASK, and you are the MAIN TASK OWNER of the subtask, explaining it to an executor who knows nothing about the original MAIN TASK. The subtask must be described in the following format:
+        ```start_of_subtask_identification_output
+        subtask_identified: |- # high-level, single-sentence description of the subtask
+          {{subtask_identified}}
+        ```end_of_subtask_identification_output
+        Any additional comments or thoughts can be added before or after the output blocks.
+        """
+        return dedent_and_strip(template).format(
+            subtask_extraction_core=self.blueprint.reasoning.subtask_extraction
+        )
+
+    @property
+    def subtasks(self) -> TaskList:
+        """Subtasks of the orchestrator."""
+        return self.task.subtasks
+
+    @property
+    def validator_state(self) -> str:
+        """State sent to the validator."""
+        template = """
+        ## MAIN TASK DESCRIPTION:
+        Here is information about the main task being worked on:
+        ```start_of_main_task_description
+        {task_specification}
+        ```end_of_main_task_description
+
+        ## SUBTASKS:
+        Here are the subtasks that have been identified so far:
+
+        ### SUBTASKS (COMPLETED):
+        ```start_of_completed_subtasks
+        {completed_subtasks}
+        ```end_of_completed_subtasks
+
+        ### SUBTASKS (CANCELLED):
+        ```start_of_cancelled_subtasks
+        {cancelled_subtasks}
+        ```end_of_cancelled_subtasks
+
+        ### SUBTASKS (IN_VALIDATION):
+        ```start_of_in_validation_subtasks
+        {in_validation_subtasks}
+        ```end_of_in_validation_subtasks
+
+        ### SUBTASKS (IN_PROGRESS):
+        ```start_of_delegated_subtasks
+        {delegated_subtasks}
+        ```end_of_delegated_subtasks
+
+        ### SUBTASKS (NEW):
+        ```start_of_new_subtasks
+        {new_subtasks}
+        ```end_of_new_subtasks
+
+        ### SUBTASKS (BLOCKED):
+        ```start_of_blocked_subtasks
+        {blocked_subtasks}
+        ```end_of_blocked_subtasks
+        """
+        completed_subtasks = str(
+            self.subtasks.filter_by_status(TaskWorkStatus.COMPLETED)
+        )
+        cancelled_subtasks = str(
+            self.subtasks.filter_by_status(TaskWorkStatus.CANCELLED)
+        )
+        in_validation_subtasks = str(
+            self.subtasks.filter_by_status(TaskWorkStatus.IN_VALIDATION)
+        )
+        delegated_subtasks = str(
+            self.subtasks.filter_by_status(TaskWorkStatus.IN_PROGRESS)
+        )
+        new_subtasks = str(self.subtasks.filter_by_status(TaskWorkStatus.IDENTIFIED))
+        blocked_subtasks = str(self.subtasks.filter_by_status(TaskWorkStatus.BLOCKED))
+        return dedent_and_strip(template).format(
+            task_specification=str(self.task),
+            completed_subtasks=completed_subtasks,
+            cancelled_subtasks=cancelled_subtasks,
+            in_validation_subtasks=in_validation_subtasks,
+            delegated_subtasks=delegated_subtasks,
+            new_subtasks=new_subtasks,
+            blocked_subtasks=blocked_subtasks,
+        )
+
+    def validate_subtask_identification(self, subtask: str) -> ValidationResult:
+        """Validate some work."""
+        instructions = """
+        {validator_state}
+
+        ## REQUEST FOR YOU:
+        Please check that the subtask identification is correct:
+        - Subtask: {subtask}
+        """
+        instructions = dedent_and_strip(instructions).format(
+            validator_state=self.validator_state,
+            subtask=subtask,
+        )
+        return self.task.validator.validate(instructions)
+
+    def add_subtask(self, subtask: Task) -> None:
+        """Add a subtask to the orchestrator."""
+        self.task.subtasks.items.append(subtask)
+
+    def identify_new_subtask(self) -> ActionResult:
         """Identify a new subtask."""
-
-        # subtask extraction prompt
-        breakpoint()
-        # extract subtask
-        breakpoint()
-        # delegate executor
-        # > mordin mode for reasoning generator
+        new_subtask = query_model(
+            model=precise_model,
+            messages=[
+                SystemMessage(content=self.subtask_extraction_context),
+                SystemMessage(content=self.subtask_extraction_reasoning),
+            ],
+            preamble="Extracting subtask...",
+            color=AGENT_COLOR,
+        )
+        extracted_subtask = extract_blocks(
+            new_subtask, "start_of_subtask_identification_output"
+        )
+        if not extracted_subtask:
+            raise ExtractionError(
+                f"Could not extract subtask from the result:\n{new_subtask}"
+            )
+        extracted_subtask = str(yaml.load(extracted_subtask[-1])["subtask_identified"])
+        subtask_validation = self.validate_subtask_identification(extracted_subtask)
+        subtask_identification_event = Event(
+            data=SubtaskIdentificationData(
+                subtask=extracted_subtask,
+                validation_result=subtask_validation,
+            )
+        )
+        action_result = ActionResult(
+            pause_execution=PauseExecution(False),
+            new_events=[subtask_identification_event],
+        )
+        if not subtask_validation.valid:
+            return action_result
+        subtask = Task(
+            name=extracted_subtask,
+            owner_id=self.id,
+            rank_limit=None if self.rank_limit is None else self.rank_limit - 1,
+            description=TaskDescription(information=extracted_subtask),
+            validator=self.task.validator,
+        )
+        self.delegator.assign_executor(subtask)
+        assert subtask.executor is not None, "Task executor assignment failed."
+        self.add_subtask(subtask)
+        return action_result
 
     def act(self, decision: ActionDecision) -> ActionResult:
         """Act on a decision."""
@@ -1101,8 +1258,10 @@ class Orchestrator:
         if decision.action_name == ActionName.IDENTIFY_NEW_SUBTASK.value:
             return self.identify_new_subtask()
 
-        # >
-        breakpoint()
+        # > fix identified/new status
+        # > fix subtask indentation for reasoning generation
+        # > fix subtask status insertion into default action prompt
+        breakpoint()  # print(*(message.content for message in messages), sep="\n\n---\n\n")
         # "extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
         # "discuss_with_agent",
         #     # these are all options for individual discussion messages
@@ -1158,15 +1317,12 @@ class Orchestrator:
             action_result = self.act(action_decision)
             if action_result.new_events:
                 self.add_to_event_log(action_result.new_events)
-            self.task.work_status = action_result.new_work_status
-            self.task.event_status = action_result.new_event_status
+            if action_result.new_work_status:
+                self.task.work_status = action_result.new_work_status
+            if action_result.new_event_status:
+                self.task.event_status = action_result.new_event_status
             if action_result.pause_execution:
                 break
-
-            raise NotImplementedError
-            # choose action
-            # execute next action # when extracting subtask, always provide name of subtask
-            # update task status
         if not (last_event := self.task.event_log.last_event):
             raise NotImplementedError
         if not isinstance(last_event.data, MessageData):  # type: ignore
@@ -1294,6 +1450,29 @@ class Delegator:
         """Evaluate candidates for a task."""
         raise NotImplementedError
 
+    def make_executor(self, task: Task) -> Executor:
+        """Factory for creating a new executor for a task."""
+        if base_capability := self.map_base_capability(task):
+            raise NotImplementedError
+            return create_base_capability(base_capability)
+
+        # now we know it's not a basic task that a simple bot can handle, so we must create an orchestrator
+        blueprint = Blueprint(
+            name=f"aranea_orchestrator_{task.id}",
+            role=Role.ORCHESTRATOR,
+            rank=None,
+            task_history=[task.id],
+            reasoning=Reasoning(),
+            knowledge="",
+            recent_events_size=Orchestrator.default_recent_events_size,
+        )
+        return Orchestrator(
+            blueprint=blueprint,
+            task=task,
+            files_parent_dir=self.executors_dir,
+            delegator=self,
+        )
+
     def delegate(
         self,
         task: Task,
@@ -1313,6 +1492,13 @@ class Delegator:
                 task.rank_limit = candidate.rank
                 return DelegationSuccessful(True)
         return DelegationSuccessful(False)
+
+    def assign_executor(self, task: Task) -> None:
+        """Assign an existing or new executor to a task."""
+        delegation_successful = self.delegate(task)
+        # blueprints represent known capabilities; so, failure means we must create a new executor
+        if not delegation_successful:
+            task.executor = self.make_executor(task)
 
     def map_base_capability(self, task: Task) -> BaseCapability | None:
         """Map a task to a base capability if possible."""
@@ -1336,9 +1522,7 @@ class Delegator:
             return
 
         # now we know it's a base capability
-        automapped_capability = automap_base_capability(
-            task, self.base_capabilities
-        )
+        automapped_capability = automap_base_capability(task, self.base_capabilities)
         capability_validation_question = dedent_and_strip(
             """
             I have identified the following base capability for this task:
@@ -1383,29 +1567,6 @@ class Delegator:
         # TODO: basic file reading/writing task case
         # TODO: basic browser task case
 
-    def make_executor(self, task: Task) -> Executor:
-        """Factory for creating a new executor for a task."""
-        if base_capability := self.map_base_capability(task):
-            raise NotImplementedError
-            return create_base_capability(base_capability)
-
-        # now we know it's not a basic task that a simple bot can handle, so we must create an orchestrator
-        blueprint = Blueprint(
-            name=f"aranea_orchestrator_{task.id}",
-            role=Role.ORCHESTRATOR,
-            rank=None,
-            task_history=[task.id],
-            reasoning=Reasoning(),
-            knowledge="",
-            recent_events_size=Orchestrator.default_recent_events_size,
-        )
-        return Orchestrator(
-            blueprint=blueprint,
-            task=task,
-            files_parent_dir=self.executors_dir,
-            delegator=self,
-        )
-
 
 def default_bot_base_capabilities() -> list["BaseCapability"]:
     """Default base capabilities for bots."""
@@ -1422,8 +1583,14 @@ class Aranea:
         default_factory=default_bot_base_capabilities
     )
     """Base automated capabilities of the agent."""
-    base_capability_advisor: Advisor = field(default_factory=Human)
+    base_capability_advisor: Advisor = field(
+        default_factory=lambda: Human(name="Human Advisor")
+    )
     """Advisor for determining if some task is doable via a base capabilities."""
+    work_validator: WorkValidator = field(
+        default_factory=lambda: Human(name="Human Validator")
+    )
+    """Agent that approves or rejects work."""
 
     def __post_init__(self) -> None:
         """Post-initialization hook."""
@@ -1466,12 +1633,9 @@ class Aranea:
             description=TaskDescription(information=message),
             owner_id=self.id,
             rank_limit=None,
+            validator=self.work_validator,
         )
-        delegation_successful = self.delegator.delegate(task)
-        # blueprints represent known capabilities; so, failure means we must create a new executor
-        if not delegation_successful:
-            task.executor = self.delegator.make_executor(task)
-
+        self.delegator.assign_executor(task)
         assert task.executor is not None, "Task executor assignment failed."
         reply_text = await task.executor.execute()
 
@@ -1488,9 +1652,10 @@ class Aranea:
         )
 
 
-# merge human vs bot capabilities—human execution time should be be enough of a penalty
+# > main aranea agent: create name "Main Task" for task when initializing task
+# > check that when printing as main task, name is actually being
+# next action execution > placeholder for `wait` action > event log for task also includes agent decisions and thoughts
 # ....
-# > next action execution > placeholder for `wait` action > event log for task also includes agent decisions and thoughts
 # > if a task is set to be complete, trigger validation agent automatically
 # knowledge learning: level of confidence about the knowledge # when updating knowledge, can add, subtract, update, or promote/demote knowledge
 # knowledge learning: must define terms
@@ -1655,27 +1820,29 @@ class NullTestTaskOwner:
         return f"Answer to '{question}'"
 
 
-null_test_task = Task(
-    name="Some task",
-    description=TaskDescription(
-        information="Some information.", definition_of_done="Some definition of done."
-    ),
-    rank_limit=None,
-    owner_id=NullTestTaskOwner().id,
-)
+# null_test_task = Task(
+#     name="Some task",
+#     description=TaskDescription(
+#         information="Some information.", definition_of_done="Some definition of done."
+#     ),
+#     rank_limit=None,
+#     owner_id=NullTestTaskOwner().id,
+# )
 
-example_test_task = Task(
-    name="Reorganize files on a flash drive",
-    description=TaskDescription(
-        information="The files on the flash drive are currently unorganized.",
-        definition_of_done="N/A",
-    ),
-    rank_limit=None,
-    owner_id=Human().id,
-)
+# example_test_task = Task(
+#     name="Reorganize files on a flash drive",
+#     description=TaskDescription(
+#         information="The files on the flash drive are currently unorganized.",
+#         definition_of_done="N/A",
+#     ),
+#     rank_limit=None,
+#     owner_id=Human().id,
+# )
+
 # task: learn how to create langchain agent
 # task: full flow of learning how to perform some skill from a tutorial
 # task: create an oai assistant agent using only documentation # need to set up virtual environment for it
+# task: buy herbal tea from amazon
 
 TEST_DIR = Path(".data/test/agents")
 # test_blueprint = Blueprint(
@@ -1755,7 +1922,7 @@ def test_default_action_reasoning() -> None:
 
 def test_generate_extraction_reasoning() -> None:
     """Run test."""
-    generate_extraction_reasoning(printout=True)
+    generate_subtask_extraction_reasoning(printout=True)
 
 
 def test_human_cache_response():
@@ -1779,7 +1946,9 @@ async def test_full() -> None:
     with shelve.open(".data/test/aranea_human_reply_cache", writeback=True) as cache:
         human_tester = Human(reply_cache=cache)
         aranea = Aranea(
-            files_dir=Path(".data/test/aranea"), base_capability_advisor=human_tester
+            files_dir=Path(".data/test/aranea"),
+            base_capability_advisor=human_tester,
+            work_validator=human_tester,
         )
         task = "Create an OpenAI assistant agent."
         reply = (result := await aranea.run(task)).content
@@ -1802,3 +1971,9 @@ def test() -> None:
 
 if __name__ == "__main__":
     test()
+
+# SUBTASK_DESCRIPTION_REQUIREMENTS = """
+# - Term Definitions: every term related to the main task is defined within the subtask description. No assumptions of prior knowledge.
+# - Contextual Independence: subtask description stands independently of the main task description. Should be understandable without main task details.
+# - Objective Clarity: Clearly state the subtask's objective. Objective should be specific, measurable, and achievable within the scope of the subtask.
+# """
