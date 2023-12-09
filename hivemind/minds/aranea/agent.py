@@ -482,6 +482,7 @@ class ActionName(Enum):
     START_DISCUSSION_FOR_SUBTASK = "START_DISCUSSION_FOR_SUBTASK"
     MESSAGE_TASK_OWNER = "ASK_MAIN_TASK_OWNER"
     REPORT_MAIN_TASK_COMPLETE = "REPORT_MAIN_TASK_COMPLETE"
+    WAIT = "WAIT"
 
 
 ORCHESTRATOR_CONCEPTS = f"""
@@ -962,6 +963,7 @@ class Orchestrator:
         - `{START_DISCUSSION_FOR_SUBTASK}: "{{id}}"`: open a discussion thread with a subtask's executor, which allows you to exchange information about the subtask, and then optionally updating its status at the end of the discussion—starting, pausing, resuming, cancelling, etc. {{id}} must be replaced with the id of the subtask to be discussed.
         - `{MESSAGE_TASK_OWNER}: "{{message}}"`: send a message to the task owner to gather or clarify information about the task. {{message}} must be replaced with the message you want to send.
         - `{REPORT_MAIN_TASK_COMPLETE}`: report the main task as complete.
+        - `{WAIT}`: do nothing until the next event from an executor or the MAIN TASK OWNER.
         """
         return dedent_and_strip(
             actions.format(
@@ -970,6 +972,7 @@ class Orchestrator:
                 START_DISCUSSION_FOR_SUBTASK=ActionName.START_DISCUSSION_FOR_SUBTASK.value,
                 MESSAGE_TASK_OWNER=ActionName.MESSAGE_TASK_OWNER.value,
                 REPORT_MAIN_TASK_COMPLETE=ActionName.REPORT_MAIN_TASK_COMPLETE.value,
+                WAIT=ActionName.WAIT.value,
             )
         )
 
@@ -1276,9 +1279,8 @@ class Orchestrator:
         if decision.action_name == ActionName.REPORT_MAIN_TASK_COMPLETE.value:
             raise NotImplementedError
 
+        # add "wait_for_next_event"
         breakpoint()
-        # > add "wait_for_next_event"
-        # add generator to event data
         # discuss_subtask > open up subtask discussion mode > preset message if subtask is a newly identified one # warn of missing context and have executor ask questions
 
     def message_from_owner(self, message: str) -> Event:
