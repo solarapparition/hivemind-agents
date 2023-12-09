@@ -298,7 +298,7 @@ class EventLog:
         """Recent events."""
         return EventLog(events=self.events[-num_recent:])
 
-    def add(self, events: Sequence[Event]) -> None:
+    def add(self, *events: Event) -> None:
         """Add events to the event log."""
         self.events.extend(events)
 
@@ -1018,9 +1018,21 @@ class Orchestrator:
             default_actions=self.default_actions,
         )
 
+    def validate_action_mode_value(self, action_mode: ActionModeName) -> None:
+        """Validate the value of the action mode."""
+        if self.focused_subtask is None:
+            assert (
+                action_mode == ActionModeName.DEFAULT
+            ), f"Action mode must be {ActionModeName.DEFAULT} when focused subtask is None. {action_mode=}, {self.focused_subtask=}"
+        else:
+            assert (
+                action_mode == ActionModeName.SUBTASK_DISCUSSION
+            ), f"Action mode must be {ActionModeName.SUBTASK_DISCUSSION} when focused subtask is not None. {action_mode=}, {self.focused_subtask=}"
+
     @property
     def action_mode(self) -> ActionModeName:
         """What action state the orchestrator is in."""
+        self.validate_action_mode_value(self._action_mode)
         return self._action_mode
 
     @action_mode.setter
@@ -1028,25 +1040,30 @@ class Orchestrator:
         """Set the action state of the orchestrator."""
         self._action_mode = value
 
+    def validate_focused_subtask_value(self, focused_subtask: Task | None) -> None:
+        """Validate the value of the focused subtask."""
+        assert (
+            focused_subtask is None or focused_subtask in self.subtasks
+        ), f"Focused subtask must be None or in subtasks. {focused_subtask=}, {self.subtasks=}"
+        if self.action_mode == ActionModeName.DEFAULT:
+            assert (
+                focused_subtask is None
+            ), f"Focused subtask must be None in default mode. {focused_subtask=}"
+        if self.action_mode == ActionModeName.SUBTASK_DISCUSSION:
+            assert isinstance(
+                focused_subtask, Task
+            ), f"Focused subtask must be a Task when in subtask discussion mode. {focused_subtask=}"
+
     @property
     def focused_subtask(self) -> Task | None:
         """Subtask that the orchestrator is currently focused on."""
-        assert (
-            self._focused_subtask is None or self._focused_subtask in self.subtasks
-        ), f"Focused subtask must be None or in subtasks. {self._focused_subtask=}, {self.subtasks=}"
-        if self.action_mode == ActionModeName.DEFAULT:
-            assert (
-                self._focused_subtask is None
-            ), f"Focused subtask must be None in default mode. {self._focused_subtask=}"
-        if self.action_mode == ActionModeName.SUBTASK_DISCUSSION:
-            assert isinstance(
-                self._focused_subtask, Task
-            ), f"Focused subtask must be a Task in subtask discussion mode. {self._focused_subtask=}"
+        self.validate_focused_subtask_value(self._focused_subtask)
         return self._focused_subtask
 
     @focused_subtask.setter
     def focused_subtask(self, value: Task | None) -> None:
         """Set the focused subtask of the orchestrator."""
+        self.validate_focused_subtask_value(value)
         self._focused_subtask = value
 
     @property
@@ -1243,14 +1260,33 @@ class Orchestrator:
         self.action_mode = ActionModeName.SUBTASK_DISCUSSION
         self.focused_subtask = subtask
 
+    def subtask_message(self, subtask: Task, message: str) -> Event:
+        """Format a message to a subtask."""
+        assert (
+            subtask.executor_id is not None
+        ), "Cannot post message to subtask without an executor."
+        return Event(
+            data=MessageData(
+                sender=self.id,
+                recipient=subtask.executor_id,
+                content=message,
+            )
+        )
+
+    def send_subtask_message(self, message: str) -> None:
+        """Post a message to the focused subtask."""
+        assert (
+            self.focused_subtask is not None
+        ), "Subtask message can only be sent when a subtask is focused."
+        self.focused_subtask.event_log.add(
+            self.subtask_message(self.focused_subtask, message)
+        )
+
     def initiate_subtask(self, subtask: Task) -> None:
         """Initiate a subtask."""
-        initiation_message = "Hi, please feel free to ask me any questions about the context of this task—I've only given you a brief description to start with, but I can provide more information if you need it."
         self.activate_subtask_mode(subtask)
-
-        self.send_subtask_message(
-            initiation_message
-        )  # > errors out if subtask mode is not activated
+        initiation_message = "Hi, please feel free to ask me any questions about the context of this task—I've only given you a brief description to start with, but I can provide more information if you need it."
+        self.send_subtask_message(initiation_message)
         breakpoint()
 
     def identify_new_subtask(self) -> ActionResult:
@@ -1358,7 +1394,7 @@ class Orchestrator:
 
     def add_to_event_log(self, events: Sequence[Event]) -> None:
         """Add events to the event log."""
-        self.task.event_log.add(events)
+        self.task.event_log.add(*events)
         self._new_event_count += len(events)
         if self._new_event_count >= self.state_update_frequency:
             self.update_state_from_new_events()
