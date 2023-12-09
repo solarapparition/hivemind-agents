@@ -1255,7 +1255,7 @@ class Orchestrator:
         """Add a subtask to the orchestrator."""
         self.task.subtasks.items.append(subtask)
 
-    def activate_subtask_mode(self, subtask: Task) -> None:
+    def focus_on_subtask(self, subtask: Task) -> None:
         """Activate subtask mode."""
         self.action_mode = ActionModeName.SUBTASK_DISCUSSION
         self.focused_subtask = subtask
@@ -1281,13 +1281,13 @@ class Orchestrator:
         self.focused_subtask.event_log.add(
             self.subtask_message(self.focused_subtask, message)
         )
+        self.focused_subtask.event_status = TaskEventStatus.AWAITING_EXECUTOR
 
     def initiate_subtask(self, subtask: Task) -> None:
         """Initiate a subtask."""
-        self.activate_subtask_mode(subtask)
+        self.focus_on_subtask(subtask)
         initiation_message = "Hi, please feel free to ask me any questions about the context of this task—I've only given you a brief description to start with, but I can provide more information if you need it."
         self.send_subtask_message(initiation_message)
-        breakpoint()
 
     def identify_new_subtask(self) -> ActionResult:
         """Identify a new subtask."""
@@ -1332,11 +1332,12 @@ class Orchestrator:
         self.delegator.assign_executor(subtask)
         assert subtask.executor is not None, "Task executor assignment failed."
         self.add_subtask(subtask)
-
         self.initiate_subtask(subtask)
+
+        # validate results
         breakpoint()
         return ActionResult(
-            pause_execution=PauseExecution(True),
+            pause_execution=PauseExecution(False),
             new_events=[subtask_identification_event],
         )
 
@@ -1355,6 +1356,7 @@ class Orchestrator:
             raise NotImplementedError
 
         breakpoint()
+        # > if AUTO_AWAIT_EXECUTOR_ACTION, automatically execute waiting action if there are subtasks awaiting executor reply > otherwise unimplemented
         # > subtask mode instruction generation: orchestrator doesn't always understand that the executor doesn't have the same information as the orchestrator
         # > always refer to subtask as "this task"
         # > remove all extraneous references that aren't relevant
