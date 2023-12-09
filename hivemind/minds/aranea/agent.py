@@ -346,12 +346,6 @@ class Executor(Protocol):
         raise NotImplementedError
 
 
-class ExecutorState(Enum):
-    """State of an executor."""
-
-    DEFAULT = "default"
-
-
 @dataclass
 class Task:
     """Holds information about a task."""
@@ -361,9 +355,6 @@ class Task:
     rank_limit: int | None
     validator: WorkValidator
     name: str | None = None
-    # validator: WorkValidator = field(
-    #     default_factory=lambda: Human(name="Human Validator")
-    # )
     id: TaskId = field(default_factory=lambda: generate_aranea_id(TaskId))
     executor: Executor | None = None
     notes: dict[str, str] = field(default_factory=dict)
@@ -541,11 +532,18 @@ By default, the orchestrator has access to the following information. Note that 
 """.strip()
 
 
+class ActionModeName(Enum):
+    """States of an action."""
+
+    DEFAULT = "DEFAULT"
+    SUBTASK_DISCUSSION = "SUBTASK DISCUSSION"
+
+
 def generate_action_reasoning(
-    role: Role, state: ExecutorState, actions: str, printout: bool = False
+    role: Role, state: ActionModeName, actions: str, printout: bool = False
 ) -> str:
     """Generate reasoning for choosing an action."""
-    if role == Role.ORCHESTRATOR and state == ExecutorState.DEFAULT:
+    if role == Role.ORCHESTRATOR and state == ActionModeName.DEFAULT:
         context = """
         ## MISSION:
         You are the instructor for an AI task orchestration agent. Your purpose is to provide step-by-step guidance for the agent to think through what it must do next.
@@ -563,7 +561,7 @@ def generate_action_reasoning(
         - Assume that the orchestrator has access to the information described above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3.
         - The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section").
         - Typically, tasks that are {TaskWorkStatus.COMPLETED.value}, {TaskWorkStatus.CANCELLED.value}, {TaskWorkStatus.IN_PROGRESS.value}, or {TaskWorkStatus.IN_VALIDATION.value} do not need immediate attention unless the orchestrator discovers information that changes the status of the subtask. Tasks that are NEW or BLOCKED will need action from the orchestrator to start or resume execution respectively.
-        - The reasoning process should be written in second person and be around 5-7 steps.
+        - The reasoning process should be written in second person and be around 5-7 steps, though you can add substeps within a step if it is complex.
         - The reasoning steps can refer to the results of previous steps, and it may be effective to build up the orchestrator's mental context step by step, starting from basic information available, similar to writing a procedural script for a program but in natural language instead of code.
 
         Provide the reasoning process in the following format:
@@ -617,7 +615,7 @@ def generate_subtask_extraction_reasoning(printout: bool = False) -> str:
     - The orchestrator requires precise references to information in its information sections, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section").
     - In its current state, the orchestrator is not able to perform any other actions besides subtask identification and the reasoning preceeding it.
     - The orchestrator should only perform the subtask identification after it has considered _all_ the information it needs. No other actions need to be performed after subtask identification.
-    - The reasoning process should be written in second person and be around 5-7 steps.
+    - The reasoning process should be written in second person and be around 5-7 steps, though you can add substeps within a step if it is complex.
     - The reasoning steps can refer to the results of previous steps, and it may be effective to build up the orchestrator's mental context step by step, starting from basic information available, similar to writing a procedural script for a program but in natural language instead of code.
     Provide the reasoning process in the following format:
     ```start_of_reasoning_process
@@ -684,12 +682,6 @@ class ActionDecision:
         )
 
 
-class ActionStateName(Enum):
-    """States of an action."""
-
-    DEFAULT = "default"
-
-
 PauseExecution = NewType("PauseExecution", bool)
 
 
@@ -712,7 +704,8 @@ class Orchestrator:
     files_parent_dir: Path
     delegator: "Delegator"
 
-    _action_state: ActionStateName = ActionStateName.DEFAULT
+    _action_mode: ActionModeName = ActionModeName.DEFAULT
+    _focused_subtask: Task | None = None
 
     @classmethod
     @property
@@ -957,11 +950,11 @@ class Orchestrator:
 
     @property
     def default_actions(self) -> str:
-        """Actions available in the default state."""
+        """Actions available in the default mode."""
         actions = """
         - `{IDENTIFY_NEW_SUBTASK}`: identify a new subtask from the MAIN TASK that is not yet on the existing subtask list. This adds the subtask to the list, assigns it an executor, and gives it the {IDENTIFIED} status.
         - `{START_DISCUSSION_FOR_SUBTASK}: "{{id}}"`: open a discussion thread with a subtask's executor, which allows you to exchange information about the subtask, and then optionally updating its status at the end of the discussion—starting, pausing, resuming, cancelling, etc. {{id}} must be replaced with the id of the subtask to be discussed.
-        - `{MESSAGE_TASK_OWNER}: "{{message}}"`: send a message to the task owner to gather or clarify information about the task. {{message}} must be replaced with the message you want to send.
+        - `{MESSAGE_TASK_OWNER}: "{{message}}"`: send a message to the MAIN TASK OWNER to gather or clarify information about the task. {{message}} must be replaced with the message you want to send.
         - `{REPORT_MAIN_TASK_COMPLETE}`: report the main task as complete.
         - `{WAIT}`: do nothing until the next event from an executor or the MAIN TASK OWNER.
         """
@@ -978,10 +971,13 @@ class Orchestrator:
 
     @property
     def default_action_reasoning(self) -> str:
-        """Prompt for choosing an action in the default state."""
+        """Prompt for choosing an action in the default mode."""
         if not self.blueprint.reasoning.default_action_choice:
             self.blueprint.reasoning.default_action_choice = generate_action_reasoning(
-                self.role, ExecutorState.DEFAULT, self.default_actions, printout=VERBOSE
+                self.role,
+                ActionModeName.DEFAULT,
+                self.default_actions,
+                printout=VERBOSE,
             )
         action_choice_core = self.blueprint.reasoning.default_action_choice
         template = """
@@ -1023,26 +1019,47 @@ class Orchestrator:
         )
 
     @property
-    def action_state(self) -> ActionStateName:
+    def action_mode(self) -> ActionModeName:
         """What action state the orchestrator is in."""
-        return self._action_state
+        return self._action_mode
 
-    @action_state.setter
-    def action_state(self, value: ActionStateName) -> None:
+    @action_mode.setter
+    def action_mode(self, value: ActionModeName) -> None:
         """Set the action state of the orchestrator."""
-        self._action_state = value
+        self._action_mode = value
+
+    @property
+    def focused_subtask(self) -> Task | None:
+        """Subtask that the orchestrator is currently focused on."""
+        assert (
+            self._focused_subtask is None or self._focused_subtask in self.subtasks
+        ), f"Focused subtask must be None or in subtasks. {self._focused_subtask=}, {self.subtasks=}"
+        if self.action_mode == ActionModeName.DEFAULT:
+            assert (
+                self._focused_subtask is None
+            ), f"Focused subtask must be None in default mode. {self._focused_subtask=}"
+        if self.action_mode == ActionModeName.SUBTASK_DISCUSSION:
+            assert isinstance(
+                self._focused_subtask, Task
+            ), f"Focused subtask must be a Task in subtask discussion mode. {self._focused_subtask=}"
+        return self._focused_subtask
+
+    @focused_subtask.setter
+    def focused_subtask(self, value: Task | None) -> None:
+        """Set the focused subtask of the orchestrator."""
+        self._focused_subtask = value
 
     @property
     def action_choice_context(self) -> str:
         """Context for choosing an action."""
-        if self.action_state == ActionStateName.DEFAULT:
+        if self.action_mode == ActionModeName.DEFAULT:
             return self.default_action_context
         raise NotImplementedError
 
     @property
     def action_choice_reasoning(self) -> str:
         """Prompt for choosing an action."""
-        if self.action_state == ActionStateName.DEFAULT:
+        if self.action_mode == ActionModeName.DEFAULT:
             return self.default_action_reasoning
         raise NotImplementedError
 
@@ -1221,6 +1238,21 @@ class Orchestrator:
         """Add a subtask to the orchestrator."""
         self.task.subtasks.items.append(subtask)
 
+    def activate_subtask_mode(self, subtask: Task) -> None:
+        """Activate subtask mode."""
+        self.action_mode = ActionModeName.SUBTASK_DISCUSSION
+        self.focused_subtask = subtask
+
+    def initiate_subtask(self, subtask: Task) -> None:
+        """Initiate a subtask."""
+        initiation_message = "Hi, please feel free to ask me any questions about the context of this task—I've only given you a brief description to start with, but I can provide more information if you need it."
+        self.activate_subtask_mode(subtask)
+
+        self.send_subtask_message(
+            initiation_message
+        )  # > errors out if subtask mode is not activated
+        breakpoint()
+
     def identify_new_subtask(self) -> ActionResult:
         """Identify a new subtask."""
         messages = [
@@ -1249,12 +1281,11 @@ class Orchestrator:
                 validation_result=subtask_validation,
             )
         )
-        action_result = ActionResult(
-            pause_execution=PauseExecution(False),
-            new_events=[subtask_identification_event],
-        )
         if not subtask_validation.valid:
-            return action_result
+            return ActionResult(
+                pause_execution=PauseExecution(False),
+                new_events=[subtask_identification_event],
+            )
         subtask = Task(
             name=extracted_subtask,
             owner_id=self.id,
@@ -1265,7 +1296,13 @@ class Orchestrator:
         self.delegator.assign_executor(subtask)
         assert subtask.executor is not None, "Task executor assignment failed."
         self.add_subtask(subtask)
-        return action_result
+
+        self.initiate_subtask(subtask)
+        breakpoint()
+        return ActionResult(
+            pause_execution=PauseExecution(True),
+            new_events=[subtask_identification_event],
+        )
 
     def act(self, decision: ActionDecision) -> ActionResult:
         """Act on a decision."""
@@ -1278,10 +1315,18 @@ class Orchestrator:
             raise NotImplementedError
         if decision.action_name == ActionName.REPORT_MAIN_TASK_COMPLETE.value:
             raise NotImplementedError
+        if decision.action_name == ActionName.WAIT.value:
+            raise NotImplementedError
 
-        # add "wait_for_next_event"
         breakpoint()
-        # discuss_subtask > open up subtask discussion mode > preset message if subtask is a newly identified one # warn of missing context and have executor ask questions
+        # > subtask mode instruction generation: orchestrator doesn't always understand that the executor doesn't have the same information as the orchestrator
+        # > always refer to subtask as "this task"
+        # > remove all extraneous references that aren't relevant
+        # > subtask mode action: send message
+        # > `{MESSAGE_TASK_OWNER}: "{{message}}"`: send a message to the MAIN TASK OWNER to gather or clarify information about the task. {{message}} must be replaced with the message you want to send.
+        # > `{WAIT}`: do nothing until the next event from an executor or the MAIN TASK OWNER.
+        # > subtask mode action: close subtask
+        # discuss_subtask > open up subtask discussion mode > preset message if subtask is a newly identified one # warn of missing context and have executor ask questions > subtask discussion mode doesn't have other subtasks
 
     def message_from_owner(self, message: str) -> Event:
         """Create a message from the task owner."""
@@ -1908,7 +1953,7 @@ def test_id_generation() -> None:
 def test_generate_reasoning() -> None:
     """Test generate_reasoning()."""
     assert generate_action_reasoning(
-        Role.ORCHESTRATOR, ExecutorState.DEFAULT, printout=True
+        Role.ORCHESTRATOR, ActionModeName.DEFAULT, printout=True
     )
 
 
