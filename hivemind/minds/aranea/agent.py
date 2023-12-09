@@ -143,13 +143,16 @@ class MessageData:
 class SubtaskIdentificationData:
     """Data for identifying a subtask."""
 
+    identifier: RuntimeId
     subtask: str
     validation_result: ValidationResult
 
     def __str__(self) -> str:
         if self.validation_result.valid:
-            return f"Successfully identified subtask: `{self.subtask}`"
-        return f'Attempted to identify subtask `{self.subtask}`, but the validator did not approve the subtask, with the following feedback: "{self.validation_result.feedback}"'
+            return (
+                f"{self.identifier}: Successfully identified subtask: `{self.subtask}`"
+            )
+        return f'{self.identifier}: Attempted to identify subtask `{self.subtask}`, but the validator did not approve the subtask, with the following feedback: "{self.validation_result.feedback}"'
 
 
 EventData = MessageData | SubtaskIdentificationData
@@ -1238,6 +1241,7 @@ class Orchestrator:
         subtask_validation = self.validate_subtask_identification(extracted_subtask)
         subtask_identification_event = Event(
             data=SubtaskIdentificationData(
+                identifier=self.id,
                 subtask=extracted_subtask,
                 validation_result=subtask_validation,
             )
@@ -1267,20 +1271,15 @@ class Orchestrator:
             return self.message_task_owner(decision.action_args["message"])
         if decision.action_name == ActionName.IDENTIFY_NEW_SUBTASK.value:
             return self.identify_new_subtask()
+        if decision.action_name == ActionName.START_DISCUSSION_FOR_SUBTASK.value:
+            raise NotImplementedError
+        if decision.action_name == ActionName.REPORT_MAIN_TASK_COMPLETE.value:
+            raise NotImplementedError
 
         breakpoint()
-        # > convert to y/n
-        # > start_subtask > open up subtask discussion mode > preset message when subtask is newly identified # warn of missing context
-        breakpoint()
-        # "extract_next_subtask", # extracts and delegates subtask, but doesn't start it; starting requires discussion with agent first
-        # "discuss_with_agent",
-        #     # these are all options for individual discussion messages
-        #     "informational",
-        #     "start_subtask",
-        #     "pause_subtask",
-        #     "cancel_subtask",
-        #     "resume_subtask",
-        # > need to add cancellation reason for cancelled tasks
+        # > add "wait_for_next_event"
+        # add generator to event data
+        # discuss_subtask > open up subtask discussion mode > preset message if subtask is a newly identified one # warn of missing context and have executor ask questions
 
     def message_from_owner(self, message: str) -> Event:
         """Create a message from the task owner."""
@@ -1407,12 +1406,12 @@ def automap_base_capability(
     return BaseCapability()
 
 
-def get_choice(prompt: str, allowed_choices: Set[Any], advisor: Advisor) -> int:
+def get_choice(prompt: str, allowed_choices: Set[Any], advisor: Advisor) -> Any:
     """Get a choice from the advisor."""
-    while True:  # type: ignore
-        with contextlib.suppress(ValueError):
-            return int(advisor.advise(prompt))
-        advisor.advise(f"Invalid input. Please enter {allowed_choices}.")
+    while True:
+        if (choice := advisor.advise(prompt)) in allowed_choices:
+            return choice
+        prompt = f"Invalid input. Valid choices: {allowed_choices}."
 
 
 @dataclass
@@ -1522,13 +1521,15 @@ class Delegator:
             Is this task a base capability, i.e. something that one of our bots can handle, OR a human can do in a few minutes? (y/n)
             """
         ).format(task=task.description)
-        is_base_capability = bool(
+        is_base_capability = (
             get_choice(
                 base_capability_question,
                 allowed_choices={"y", "n"},
                 advisor=self.advisor,
             )
+            == "y"
         )
+
         if not is_base_capability:
             return
 
@@ -1539,9 +1540,7 @@ class Delegator:
             I have identified the following base capability for this task:
             "{automapped_capability}"
 
-            Please confirm whether this is correct:
-            0: No.
-            1: Yes.
+            Please confirm whether this is correct (y/n):
             """
         ).format(automapped_capability=automapped_capability)
         if not automapped_capability:
@@ -1549,17 +1548,16 @@ class Delegator:
                 """
                 I have not identified any base capabilities for this task.
 
-                Please confirm whether this is correct:
-                0: No.
-                1: Yes.
+                Please confirm whether this is correct (y/n):
                 """
             )
-        is_correct = bool(
+        is_correct = (
             get_choice(
                 capability_validation_question,
-                allowed_choices={0, 1},
+                allowed_choices={"y", "n"},
                 advisor=self.advisor,
             )
+            == "y"
         )
         if is_correct:
             return automapped_capability
@@ -1663,6 +1661,9 @@ class Aranea:
         )
 
 
+# > need to add cancellation reason for cancelled tasks
+# > when subtask extraction fails, update extraction script (perhaps with trajectory of extraction history)
+# > add success record to reasoning processes
 # > main aranea agent: create name "Main Task" for task when initializing task
 # > check that when printing as main task, name is actually being
 # next action execution > placeholder for `wait` action > event log for task also includes agent decisions and thoughts
