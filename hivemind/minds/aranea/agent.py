@@ -364,7 +364,7 @@ class Task:
     executor: Executor | None = None
     notes: dict[str, str] = field(default_factory=dict)
     work_status: TaskWorkStatus = TaskWorkStatus.IDENTIFIED
-    event_status: TaskEventStatus = TaskEventStatus.NONE
+    # event_status: TaskEventStatus = TaskEventStatus.NONE
 
     @cached_property
     def event_log(self) -> EventLog:
@@ -421,13 +421,12 @@ class Task:
         Id: {id}
         Name: {name}
         Work Status: {work_status}
-        Event Status: {event_status}
         """
         return dedent_and_strip(template).format(
             id=self.id,
             name=self.name,
             work_status=self.work_status.value,
-            event_status=self.event_status.value,
+            # event_status=self.event_status.value,
         )
 
 
@@ -694,7 +693,7 @@ class ActionResult:
     pause_execution: PauseExecution
     new_events: list[Event]
     new_work_status: TaskWorkStatus | None = None
-    new_event_status: TaskEventStatus | None = None
+    # new_event_status: TaskEventStatus | None = None
 
 
 @dataclass
@@ -1121,7 +1120,7 @@ class Orchestrator:
             ],
             pause_execution=PauseExecution(True),
             new_work_status=TaskWorkStatus.BLOCKED,
-            new_event_status=TaskEventStatus.AWAITING_OWNER,
+            # new_event_status=TaskEventStatus.AWAITING_OWNER,
         )
 
     @property
@@ -1339,7 +1338,6 @@ class Orchestrator:
         self.initiate_subtask(subtask)
 
         breakpoint()
-        # task_status: remove task event status—should be wholly accounted for by regular status
         # task_status: update wait action to wait for a specific task
         return ActionResult(
             pause_execution=PauseExecution(False),
@@ -1419,8 +1417,8 @@ class Orchestrator:
                 self.add_to_event_log(action_result.new_events)
             if action_result.new_work_status:
                 self.task.work_status = action_result.new_work_status
-            if action_result.new_event_status:
-                self.task.event_status = action_result.new_event_status
+            # if action_result.new_event_status:
+            # self.task.event_status = action_result.new_event_status
             if action_result.pause_execution:
                 break
         if not (last_event := self.task.event_log.last_event):
