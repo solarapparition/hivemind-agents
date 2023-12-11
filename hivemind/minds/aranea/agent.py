@@ -134,7 +134,7 @@ def replace_agent_id(
 
 
 @dataclass(frozen=True)
-class MessageData:
+class Message:
     """Data for a message."""
 
     sender: RuntimeId
@@ -146,8 +146,8 @@ class MessageData:
 
 
 @dataclass(frozen=True)
-class SubtaskIdentificationData:
-    """Data for identifying a subtask."""
+class SubtaskIdentification:
+    """Data for identifying a new subtask."""
 
     identifier: RuntimeId
     subtask: str
@@ -1091,7 +1091,7 @@ class Orchestrator:
         return ActionResult(
             new_events=[
                 Event(
-                    data=MessageData(
+                    data=Message(
                         sender=self.id, recipient=self.task.owner_id, content=message
                     )
                 ),
@@ -1242,7 +1242,7 @@ class Orchestrator:
             subtask.executor_id is not None
         ), "Cannot post message to subtask without an executor."
         return Event(
-            data=MessageData(
+            data=Message(
                 sender=self.id,
                 recipient=subtask.executor_id,
                 content=message,
@@ -1292,8 +1292,8 @@ class Orchestrator:
         extracted_subtask = str(yaml.load(extracted_subtask[-1])["subtask_identified"])
         subtask_validation = self.validate_subtask_identification(extracted_subtask)
         subtask_identification_event = Event(
-            data=SubtaskIdentificationData(
-                identifier=self.id,
+            data=SubtaskIdentification(
+                owner_id=self.id,
                 subtask=extracted_subtask,
                 validation_result=subtask_validation,
             )
@@ -1350,7 +1350,7 @@ class Orchestrator:
     def message_from_owner(self, message: str) -> Event:
         """Create a message from the task owner."""
         return Event(
-            data=MessageData(
+            data=Message(
                 sender=self.task.owner_id,
                 recipient=self.id,
                 content=message,
@@ -1360,7 +1360,7 @@ class Orchestrator:
     def message_to_owner(self, message: str) -> Event:
         """Create a message to the task owner."""
         return Event(
-            data=MessageData(
+            data=Message(
                 sender=self.id,
                 recipient=self.task.owner_id,
                 content=message,
@@ -1407,7 +1407,7 @@ class Orchestrator:
                 break
         if not (last_event := self.task.event_log.last_event):
             raise NotImplementedError
-        if not isinstance(last_event.data, MessageData):  # type: ignore
+        if not isinstance(last_event.data, Message):  # type: ignore
             raise NotImplementedError
         if (
             last_event.data.sender != self.id
