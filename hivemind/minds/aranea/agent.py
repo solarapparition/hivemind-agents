@@ -149,19 +149,30 @@ class Message:
 class SubtaskIdentification:
     """Data for identifying a new subtask."""
 
-    identifier: RuntimeId
+    owner_id: RuntimeId
     subtask: str
     validation_result: ValidationResult
 
     def __str__(self) -> str:
         if self.validation_result.valid:
-            return (
-                f"{self.identifier}: Successfully identified subtask: `{self.subtask}`"
-            )
-        return f'{self.identifier}: Attempted to identify subtask `{self.subtask}`, but the validator did not approve the subtask, with the following feedback: "{self.validation_result.feedback}"'
+            return f"{self.owner_id}: Successfully identified subtask: `{self.subtask}`"
+        return f'{self.owner_id}: Attempted to identify subtask `{self.subtask}`, but the validator did not approve the subtask, with the following feedback: "{self.validation_result.feedback}"'
 
 
-EventData = MessageData | SubtaskIdentificationData
+@dataclass(frozen=True)
+class TaskStatusChange:
+    """Data for changing the status of a subtask."""
+
+    executor_id: RuntimeId
+    subtask_id: TaskId
+    old_status: TaskWorkStatus
+    new_status: TaskWorkStatus
+
+    def __str__(self) -> str:
+        return f"{self.executor_id}: I've changed the status of task {self.subtask_id} from {self.old_status.value} to {self.new_status.value}."
+
+
+EventData = Message | SubtaskIdentification | TaskStatusChange
 
 
 @dataclass
@@ -1095,10 +1106,17 @@ class Orchestrator:
                         sender=self.id, recipient=self.task.owner_id, content=message
                     )
                 ),
+                Event(
+                    data=TaskStatusChange(
+                        executor_id=self.id,
+                        subtask_id=self.task.id,
+                        old_status=self.task.work_status,
+                        new_status=TaskWorkStatus.BLOCKED,
+                    ),
+                ),
             ],
             pause_execution=PauseExecution(True),
             new_work_status=TaskWorkStatus.BLOCKED,
-            # new_event_status=TaskEventStatus.AWAITING_OWNER,
         )
 
     @property
