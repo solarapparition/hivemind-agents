@@ -99,6 +99,7 @@ class Blueprint:
     reasoning: Reasoning
     knowledge: str
     recent_events_size: int
+    auto_wait: bool
     id: BlueprintId = field(default_factory=lambda: generate_aranea_id(BlueprintId))
 
 
@@ -266,6 +267,10 @@ class TaskList:
         """Iterate over the task list."""
         return iter(self.items)
 
+    def __bool__(self) -> bool:
+        """Whether the task list is empty."""
+        return bool(self.items)
+
     def filter_by_status(self, status: TaskWorkStatus) -> Self:
         """Filter the task list by status."""
         return TaskList(
@@ -298,6 +303,10 @@ class EventLog:
             if self.events
             else NONE
         )
+
+    def __str__(self) -> str:
+        """String representation of the event log."""
+        return "\n".join([str(event) for event in self.events]) if self.events else NONE
 
     def recent(self, num_recent: int) -> Self:
         """Recent events."""
@@ -705,8 +714,7 @@ class Orchestrator:
     files_parent_dir: Path
     delegator: "Delegator"
 
-    _action_mode: ActionModeName = ActionModeName.DEFAULT
-    _focused_subtask: Task | None = None
+    focused_subtask: Task | None = None
 
     @classmethod
     @property
@@ -879,6 +887,11 @@ class Orchestrator:
         """Name of the orchestrator."""
         return self.blueprint.name
 
+    @property
+    def auto_wait(self) -> bool:
+        """Whether to automatically wait for new events."""
+        return self.blueprint.auto_wait
+
     def make_files_dirs(self) -> None:
         """Make the files directory for the orchestrator."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1021,60 +1034,25 @@ class Orchestrator:
             default_actions=self.default_actions,
         )
 
-    def validate_action_mode_value(self, action_mode: ActionModeName) -> None:
-        """Validate the value of the action mode."""
-        if self._focused_subtask is None:
-            assert (
-                action_mode == ActionModeName.DEFAULT
-            ), f"Action mode must be {ActionModeName.DEFAULT} when focused subtask is None. {action_mode=}, {self._focused_subtask=}"
-        else:
-            assert (
-                action_mode == ActionModeName.SUBTASK_DISCUSSION
-            ), f"Action mode must be {ActionModeName.SUBTASK_DISCUSSION} when focused subtask is not None. {action_mode=}, {self._focused_subtask=}"
-
     @property
     def action_mode(self) -> ActionModeName:
         """What action state the orchestrator is in."""
-        self.validate_action_mode_value(self._action_mode)
-        return self._action_mode
-
-    @action_mode.setter
-    def action_mode(self, value: ActionModeName) -> None:
-        """Set the action state of the orchestrator."""
-        self._action_mode = value
-
-    def validate_focused_subtask_value(self, focused_subtask: Task | None) -> None:
-        """Validate the value of the focused subtask."""
-        assert (
-            focused_subtask is None or focused_subtask in self.subtasks
-        ), f"Focused subtask must be None or in subtasks. {focused_subtask=}, {self.subtasks=}"
-        if self._action_mode == ActionModeName.DEFAULT:
-            assert (
-                focused_subtask is None
-            ), f"Focused subtask must be None in default mode. {focused_subtask=}"
-        if self._action_mode == ActionModeName.SUBTASK_DISCUSSION:
-            assert isinstance(
-                focused_subtask, Task
-            ), f"Focused subtask must be a Task when in subtask discussion mode. {focused_subtask=}"
-
-    @property
-    def focused_subtask(self) -> Task | None:
-        """Subtask that the orchestrator is currently focused on."""
-        self.validate_focused_subtask_value(self._focused_subtask)
-        return self._focused_subtask
-
-    @focused_subtask.setter
-    def focused_subtask(self, value: Task | None) -> None:
-        """Set the focused subtask of the orchestrator."""
-        self.validate_focused_subtask_value(value)
-        self._focused_subtask = value
+        if self.focused_subtask:
+            return ActionModeName.SUBTASK_DISCUSSION
+        return ActionModeName.DEFAULT
 
     @property
     def action_choice_context(self) -> str:
         """Context for choosing an action."""
         if self.action_mode == ActionModeName.DEFAULT:
             return self.default_action_context
-        raise NotImplementedError
+        # > subtask discussion mode doesn't have other subtasks > always refer to subtask as "this task" > remove all extraneous references that aren't relevant
+        # > subtask mode action: send message
+        # > `{MESSAGE_TASK_OWNER}: "{{message}}"`: send a message to the MAIN TASK OWNER to gather or clarify information about the task. {{message}} must be replaced with the message you want to send.
+        # > `{WAIT}`: do nothing until the next event from an executor or the MAIN TASK OWNER.
+        # > subtask mode action: close subtask
+        # > awaiting current subtask is different description than awaiting subtask in default mode
+        raise NotImplementedError(f"task: {self.task.description}")
 
     @property
     def action_choice_reasoning(self) -> str:
@@ -1258,11 +1236,6 @@ class Orchestrator:
         """Add a subtask to the orchestrator."""
         self.task.subtasks.items.append(subtask)
 
-    def focus_on_subtask(self, subtask: Task) -> None:
-        """Activate subtask mode."""
-        self.action_mode = ActionModeName.SUBTASK_DISCUSSION
-        self.focused_subtask = subtask
-
     def subtask_message(self, subtask: Task, message: str) -> Event:
         """Format a message to a subtask."""
         assert (
@@ -1276,6 +1249,10 @@ class Orchestrator:
             )
         )
 
+    def resume_subtask(self, subtask: Task) -> None:
+        """Resume the focused subtask."""
+        subtask.work_status = TaskWorkStatus.IN_PROGRESS
+
     def send_subtask_message(self, message: str) -> None:
         """Post a message to the focused subtask."""
         assert (
@@ -1284,13 +1261,14 @@ class Orchestrator:
         self.focused_subtask.event_log.add(
             self.subtask_message(self.focused_subtask, message)
         )
-        self.focused_subtask.work_status = TaskWorkStatus.IN_PROGRESS
+        self.resume_subtask(self.focused_subtask)
 
     def initiate_subtask(self, subtask: Task) -> None:
         """Initiate a subtask."""
-        self.focus_on_subtask(subtask)
-        initiation_message = "Hi, please feel free to ask me any questions about the context of this task—I've only given you a brief description to start with, but I can provide more information if you need it."
-        self.send_subtask_message(initiation_message)
+        self.focused_subtask = subtask
+        self.send_subtask_message(
+            "Hi, please feel free to ask me any questions about the context of this task—I've only given you a brief description to start with, but I can provide more information if you need it."
+        )
 
     def identify_new_subtask(self) -> ActionResult:
         """Identify a new subtask."""
@@ -1332,17 +1310,28 @@ class Orchestrator:
             description=TaskDescription(information=extracted_subtask),
             validator=self.task.validator,
         )
-        self.delegator.assign_executor(subtask)
+        self.delegator.assign_executor(subtask, self.recent_events_size, self.auto_wait)
         assert subtask.executor is not None, "Task executor assignment failed."
         self.add_subtask(subtask)
         self.initiate_subtask(subtask)
-
-        breakpoint()
-        # task_status: update wait action to wait for a specific task
         return ActionResult(
             pause_execution=PauseExecution(False),
             new_events=[subtask_identification_event],
         )
+
+    @property
+    def awaitable_subtasks(self) -> TaskList:
+        """Subtasks that can be awaited."""
+        # if in default mode, awaitable subtasks are all in-progress subtasks
+        if self.focused_subtask:
+            return (
+                TaskList([self.focused_subtask])
+                if self.focused_subtask.work_status == TaskWorkStatus.IN_PROGRESS
+                else TaskList()
+            )
+        if self.action_mode == ActionModeName.DEFAULT:
+            return self.subtasks.filter_by_status(TaskWorkStatus.IN_PROGRESS)
+        raise NotImplementedError
 
     def act(self, decision: ActionDecision) -> ActionResult:
         """Act on a decision."""
@@ -1357,18 +1346,6 @@ class Orchestrator:
             raise NotImplementedError
         if decision.action_name == ActionName.WAIT.value:
             raise NotImplementedError
-
-        breakpoint()
-        # > update main task description to make it clear that additional info may be in recent events
-        # > if AUTO_AWAIT_EXECUTOR_ACTION, automatically execute waiting action if there are subtasks awaiting executor reply > otherwise unimplemented
-        # > subtask mode instruction generation: orchestrator doesn't always understand that the executor doesn't have the same information as the orchestrator
-        # > always refer to subtask as "this task"
-        # > remove all extraneous references that aren't relevant
-        # > subtask mode action: send message
-        # > `{MESSAGE_TASK_OWNER}: "{{message}}"`: send a message to the MAIN TASK OWNER to gather or clarify information about the task. {{message}} must be replaced with the message you want to send.
-        # > `{WAIT}`: do nothing until the next event from an executor or the MAIN TASK OWNER.
-        # > subtask mode action: close subtask
-        # discuss_subtask > open up subtask discussion mode > preset message if subtask is a newly identified one # warn of missing context and have executor ask questions > subtask discussion mode doesn't have other subtasks
 
     def message_from_owner(self, message: str) -> Event:
         """Create a message from the task owner."""
@@ -1411,6 +1388,13 @@ class Orchestrator:
         if message is not None:
             self.add_to_event_log([self.message_from_owner(message)])
         while True:
+            if self.auto_wait and self.awaitable_subtasks:
+                events = [
+                    asyncio.create_task(subtask.executor.execute())
+                    for subtask in self.awaitable_subtasks
+                    if subtask.executor is not None
+                ]
+                await asyncio.wait(events, return_when=asyncio.FIRST_COMPLETED)
             action_decision = self.choose_action()
             action_result = self.act(action_decision)
             if action_result.new_events:
@@ -1548,7 +1532,9 @@ class Delegator:
         """Evaluate candidates for a task."""
         raise NotImplementedError
 
-    def make_executor(self, task: Task) -> Executor:
+    def make_executor(
+        self, task: Task, recent_events_size: int, auto_await: bool
+    ) -> Executor:
         """Factory for creating a new executor for a task."""
         if base_capability := self.map_base_capability(task):
             raise NotImplementedError
@@ -1562,7 +1548,8 @@ class Delegator:
             task_history=[task.id],
             reasoning=Reasoning(),
             knowledge="",
-            recent_events_size=Orchestrator.default_recent_events_size,
+            recent_events_size=recent_events_size,
+            auto_wait=auto_await,
         )
         return Orchestrator(
             blueprint=blueprint,
@@ -1591,12 +1578,14 @@ class Delegator:
                 return DelegationSuccessful(True)
         return DelegationSuccessful(False)
 
-    def assign_executor(self, task: Task) -> None:
+    def assign_executor(
+        self, task: Task, recent_events_size: int, auto_await: bool
+    ) -> None:
         """Assign an existing or new executor to a task."""
         delegation_successful = self.delegate(task)
         # blueprints represent known capabilities; so, failure means we must create a new executor
         if not delegation_successful:
-            task.executor = self.make_executor(task)
+            task.executor = self.make_executor(task, recent_events_size, auto_await)
 
     def map_base_capability(self, task: Task) -> BaseCapability | None:
         """Map a task to a base capability if possible."""
@@ -1689,6 +1678,10 @@ class Aranea:
         default_factory=lambda: Human(name="Human Validator")
     )
     """Agent that approves or rejects work."""
+    recent_events_size: int = 10
+    """Number of recent events to display in orchestrators' event logs."""
+    auto_wait: bool = True
+    """Whether orchestrators will automatically wait for their executors."""
 
     def __post_init__(self) -> None:
         """Post-initialization hook."""
@@ -1733,7 +1726,7 @@ class Aranea:
             rank_limit=None,
             validator=self.work_validator,
         )
-        self.delegator.assign_executor(task)
+        self.delegator.assign_executor(task, self.recent_events_size, self.auto_wait)
         assert task.executor is not None, "Task executor assignment failed."
         reply_text = await task.executor.execute()
 
