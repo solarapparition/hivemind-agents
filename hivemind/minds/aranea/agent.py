@@ -12,6 +12,7 @@ from uuid import uuid4 as generate_uuid
 from typing import (
     Iterable,
     Iterator,
+    Literal,
     MutableMapping,
     NewType,
     NamedTuple,
@@ -51,6 +52,8 @@ class Concepts(Enum):
     """Concepts for Aranea agents."""
 
     MAIN_TASK_OWNER = "MAIN TASK OWNER"
+    MAIN_TASK = "MAIN TASK"
+    EXECUTOR = "EXECUTOR"
     RECENT_EVENTS_LOG = "RECENT EVENTS LOG"
 
 
@@ -163,16 +166,21 @@ class SubtaskIdentification:
 class TaskStatusChange:
     """Data for changing the status of a subtask."""
 
-    executor_id: RuntimeId
+    changing_agent: RuntimeId
     subtask_id: TaskId
     old_status: TaskWorkStatus
     new_status: TaskWorkStatus
 
     def __str__(self) -> str:
-        return f"{self.executor_id}: I've changed the status of task {self.subtask_id} from {self.old_status.value} to {self.new_status.value}."
+        return f"{self.changing_agent}: I've updated the status of task {self.subtask_id} from {self.old_status.value} to {self.new_status.value}."
 
 
 EventData = Message | SubtaskIdentification | TaskStatusChange
+
+
+def replace_task_id(text_to_replace: str, task_id: TaskId, replacement: str) -> str:
+    """Replace task id with some other string."""
+    return text_to_replace.replace(task_id, f"`{replacement}`")
 
 
 @dataclass
@@ -180,6 +188,7 @@ class Event:
     """An event in the event log."""
 
     data: EventData
+    task_id: TaskId
     timestamp: str = field(default_factory=utc_timestamp)
     id: EventId = field(default_factory=lambda: generate_aranea_id(EventId))
 
@@ -188,11 +197,18 @@ class Event:
         return f"{self.data}"
 
     def to_str_with_pov(
-        self, pov_id: RuntimeId, other_id: RuntimeId, other_name: str
+        self,
+        pov_id: RuntimeId,
+        other_id: RuntimeId,
+        other_name: str,
+        task_id_replacement: str | None = None,
     ) -> str:
         """String representation of the event with a point of view from a certain executor."""
         event_printout = replace_agent_id(str(self), "You", pov_id)
-        return replace_agent_id(event_printout, other_name, other_id)
+        event_printout = replace_agent_id(event_printout, other_name, other_id)
+        if not task_id_replacement or not isinstance(self.data, TaskStatusChange):
+            return event_printout
+        return replace_task_id(event_printout, self.task_id, task_id_replacement)
 
     def serialize(self) -> dict[str, Any]:
         """Serialize the event."""
@@ -272,7 +288,7 @@ class TaskList:
     def __str__(self) -> str:
         """String representation of the task list."""
         # if we're printing out the whole task list, assume these are subtasks
-        return "\n".join([task.subtask_status_printout for task in self.items]) or NONE
+        return "\n".join([task.as_subtask_printout for task in self.items]) or NONE
 
     def __iter__(self) -> Iterator["Task"]:
         """Iterate over the task list."""
@@ -300,14 +316,27 @@ class EventLog:
         """Last event in the event log."""
         return self.events[-1] if self.events else None
 
+    @property
+    def messages(self) -> Self:
+        """Messages in the event log."""
+        return EventLog(
+            events=[event for event in self.events if isinstance(event.data, Message)]
+        )
+
     def to_str_with_pov(
-        self, pov_id: RuntimeId, other_id: RuntimeId, other_name: str
+        self,
+        pov_id: RuntimeId,
+        other_id: RuntimeId,
+        other_name: str,
+        task_id_replacement: str | None = None,
     ) -> str:
         """String representation of the event log with a point of view from a certain executor."""
         return (
             "\n".join(
                 [
-                    event.to_str_with_pov(pov_id, other_id, other_name)
+                    event.to_str_with_pov(
+                        pov_id, other_id, other_name, task_id_replacement
+                    )
                     for event in self.events
                 ]
             )
@@ -397,7 +426,7 @@ class Task:
         return TaskList()
 
     @property
-    def main_status_printout(self) -> str:
+    def as_main_task_printout(self) -> str:
         """String representation of the task as it would appear as a main task."""
         # Id: {id}
         # Owner: {owner}
@@ -418,7 +447,7 @@ class Task:
 
     def __str__(self) -> str:
         """String representation of task status."""
-        return self.main_status_printout
+        return self.as_main_task_printout
 
     @property
     def executor_id(self) -> RuntimeId | None:
@@ -426,21 +455,21 @@ class Task:
         return self.executor.id if self.executor else None
 
     @property
-    def subtask_status_printout(self) -> str:
+    def as_subtask_printout(self) -> str:
         """String representation of task as it would appear as a subtask."""
         if self.work_status in {TaskWorkStatus.COMPLETED, TaskWorkStatus.CANCELLED}:
             template = """
-            Id: {id}
-            Name: {name}
+            - Id: {id}
+              Name: {name}
             """
             return dedent_and_strip(template).format(
                 id=self.id,
                 name=self.name,
             )
         template = """
-        Id: {id}
-        Name: {name}
-        Work Status: {work_status}
+        - Id: {id}
+          Name: {name}
+          Work Status: {work_status}
         """
         return dedent_and_strip(template).format(
             id=self.id,
@@ -448,6 +477,52 @@ class Task:
             work_status=self.work_status.value,
             # event_status=self.event_status.value,
         )
+
+    def reformat_event_log(
+        self,
+        event_log: EventLog,
+        pov: Literal[Concepts.EXECUTOR, Concepts.MAIN_TASK_OWNER],
+    ) -> str:
+        """Format an event log."""
+        assert self.executor_id is not None
+        if pov == Concepts.EXECUTOR:
+            return event_log.to_str_with_pov(
+                pov_id=self.executor_id,
+                other_id=self.owner_id,
+                other_name=Concepts.MAIN_TASK_OWNER.value,
+                task_id_replacement=Concepts.MAIN_TASK.value,
+            )
+        assert (
+            self.name is not None
+        ), "If POV in a task discussion is from the main task owner, the task must have a name."
+        return event_log.to_str_with_pov(
+            pov_id=self.owner_id,
+            other_id=self.executor_id,
+            other_name=Concepts.EXECUTOR.value,
+            task_id_replacement=self.name,
+        )
+
+    def discussion(
+        self, pov: Literal[Concepts.EXECUTOR, Concepts.MAIN_TASK_OWNER]
+    ) -> str:
+        """Discussion of a task in the event log."""
+        return self.reformat_event_log(self.event_log.messages, pov)
+
+    def resume(self, resuming_agent: RuntimeId, add_event: bool) -> None:
+        """Update the task state for resumption."""
+        if add_event:
+            self.event_log.add(
+                Event(
+                    data=TaskStatusChange(
+                        changing_agent=resuming_agent,
+                        subtask_id=self.id,
+                        old_status=self.work_status,
+                        new_status=TaskWorkStatus.IN_PROGRESS,
+                    ),
+                    task_id=self.id,
+                )
+            )
+        self.work_status = TaskWorkStatus.IN_PROGRESS
 
 
 @dataclass
@@ -935,6 +1010,11 @@ class Orchestrator:
         return max(1, int(self.recent_events_size / 2))
 
     @property
+    def recent_events(self) -> EventLog:
+        """Recent events in the event log."""
+        return self.task.event_log.recent(self.recent_events_size)
+
+    @property
     def recent_event_status(self) -> str:
         """Status of recent events."""
         template = """
@@ -945,15 +1025,13 @@ class Orchestrator:
         ```end_of_recent_events_log
         """
         return dedent_and_strip(template).format(
-            event_log=self.task.event_log.recent(
-                self.recent_events_size
-            ).to_str_with_pov(
-                self.id, self.task.owner_id, Concepts.MAIN_TASK_OWNER.value
-            ),
+            event_log=self.task.reformat_event_log(
+                self.recent_events, pov=Concepts.EXECUTOR
+            )
         )
 
     @property
-    def default_status(self) -> str:
+    def default_mode_status(self) -> str:
         """Default status of the orchestrator."""
         template = """
         {core_state}
@@ -976,7 +1054,7 @@ class Orchestrator:
         }
 
     @property
-    def default_actions(self) -> str:
+    def default_mode_actions(self) -> str:
         """Actions available in the default mode."""
         actions = """
         - `{IDENTIFY_NEW_SUBTASK}`: identify a new subtask from the MAIN TASK that is not yet on the existing subtask list. This adds the subtask to the list and begins a discussion thread with the subtask's executor to start work on the task.
@@ -1003,7 +1081,7 @@ class Orchestrator:
             self.blueprint.reasoning.default_action_choice = generate_action_reasoning(
                 self.role,
                 ActionModeName.DEFAULT,
-                self.default_actions,
+                self.default_mode_actions,
                 printout=VERBOSE,
             )
         action_choice_core = self.blueprint.reasoning.default_action_choice
@@ -1034,15 +1112,15 @@ class Orchestrator:
     def default_action_context(self) -> str:
         """Prompt for choosing an action in the default state."""
         template = """
-        {default_status}
+        {default_mode_status}
 
         ## ACTION CHOICES:
         These are the actions you can currently perform.
-        {default_actions}
+        {default_mode_actions}
         """
         return dedent_and_strip(template).format(
-            default_status=self.default_status,
-            default_actions=self.default_actions,
+            default_mode_status=self.default_mode_status,
+            default_mode_actions=self.default_mode_actions,
         )
 
     @property
@@ -1053,16 +1131,83 @@ class Orchestrator:
         return ActionModeName.DEFAULT
 
     @property
+    def focused_subtask_discussion(self) -> str:
+        """Discussion of the focused subtask."""
+        assert self.focused_subtask is not None
+        template = """
+        ## SUBTASK DISCUSSION:
+        The following subtask is currently being discussed:
+        ```start_of_subtask_information
+        {subtask_information}
+        ```end_of_subtask_information
+
+        ### FULL SUBTASK DISCUSSION LOG:
+        Below is a complete log of the discussion so far. Some messages may overlap with the RECENT EVENTS LOG above.
+        ```start_of_subtask_discussion_log
+        {subtask_discussion}
+        ```end_of_subtask_discussion_log
+        """
+        return dedent_and_strip(template).format(
+            subtask_information=self.focused_subtask.as_subtask_printout,
+            subtask_discussion=self.focused_subtask.reformat_event_log(
+                self.focused_subtask.event_log.messages, pov=Concepts.MAIN_TASK_OWNER
+            ),
+        )
+
+    @property
+    def subtask_mode_status(self) -> str:
+        """Status of the orchestrator in subtask discussion mode."""
+        template = """
+        {default_mode_status}
+
+        {subtask_discussion}
+        """
+        assert self.focused_subtask is not None
+        return dedent_and_strip(template).format(
+            default_mode_status=self.default_mode_status,
+            subtask_discussion=self.focused_subtask_discussion,
+        )
+
+    @property
+    def subtask_action_context(self) -> str:
+        """Context for choosing an action in subtask discussion mode."""
+
+        template = """
+        {subtask_mode_status}
+
+        ## ACTION CHOICES:
+        These are the actions you can currently perform.
+        {subtask_mode_actions}
+        """
+
+        breakpoint()
+        # add event for opening a subtask
+        # subtask mode action: send message
+        # > when selecting executor, task success is based on similar tasks that executor dealt with before
+        # > subtask instruction generation note: log is complete
+        # > add fake timestamps
+        # `{MESSAGE_TASK_OWNER}: "{{message}}"`: send a message to the MAIN TASK OWNER to gather or clarify information about the task. {{message}} must be replaced with the message you want to send.
+        # > awaiting current subtask is different description than awaiting subtask in default mode # reference awaiting specific subtask
+        # > `{WAIT}`: do nothing until the next event from an executor or the MAIN TASK OWNER.
+        # subtask discussion mode doesn't have other subtasks > always refer to subtask as "this task" > remove all extraneous references that aren't relevant
+        # > display all subtask discussion in recent events log
+        # answering questions from executor
+        # > subtask mode action: close subtask > adds event that is a summary of the new items in the discussion
+
+        # > "the Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistatn API."
+
+        return dedent_and_strip(template).format(
+            subtask_modestatus=self.subtask_mode_status,
+            subtask_actions=self.subtask_actions,
+        )
+
+    @property
     def action_choice_context(self) -> str:
         """Context for choosing an action."""
+        if self.focused_subtask:
+            return self.subtask_action_context
         if self.action_mode == ActionModeName.DEFAULT:
             return self.default_action_context
-        # > subtask discussion mode doesn't have other subtasks > always refer to subtask as "this task" > remove all extraneous references that aren't relevant
-        # > subtask mode action: send message
-        # > `{MESSAGE_TASK_OWNER}: "{{message}}"`: send a message to the MAIN TASK OWNER to gather or clarify information about the task. {{message}} must be replaced with the message you want to send.
-        # > `{WAIT}`: do nothing until the next event from an executor or the MAIN TASK OWNER.
-        # > subtask mode action: close subtask
-        # > awaiting current subtask is different description than awaiting subtask in default mode
         raise NotImplementedError(f"task: {self.task.description}")
 
     @property
@@ -1093,26 +1238,28 @@ class Orchestrator:
         return ActionDecision.from_yaml_str(extracted_result[0])
 
     @property
-    def events(self) -> list[Event]:
+    def events(self) -> EventLog:
         """Events that have occurred during the execution of the task."""
-        return self.task.event_log.events
+        return self.task.event_log
 
     def message_task_owner(self, message: str) -> ActionResult:
         """Send message to main task owner. Main task is blocked until there is a reply."""
         return ActionResult(
             new_events=[
                 Event(
-                    data=Message(
-                        sender=self.id, recipient=self.task.owner_id, content=message
-                    )
-                ),
-                Event(
                     data=TaskStatusChange(
-                        executor_id=self.id,
+                        changing_agent=self.id,
                         subtask_id=self.task.id,
                         old_status=self.task.work_status,
                         new_status=TaskWorkStatus.BLOCKED,
                     ),
+                    task_id=self.task.id,
+                ),
+                Event(
+                    data=Message(
+                        sender=self.id, recipient=self.task.owner_id, content=message
+                    ),
+                    task_id=self.task.id,
                 ),
             ],
             pause_execution=PauseExecution(True),
@@ -1129,7 +1276,7 @@ class Orchestrator:
         {msi}
         """
         return dedent_and_strip(template).format(
-            default_status=self.default_status,
+            default_status=self.default_mode_status,
             msi=MODULAR_SUBTASK_IDENTIFICATION,
         )
 
@@ -1264,14 +1411,11 @@ class Orchestrator:
                 sender=self.id,
                 recipient=subtask.executor_id,
                 content=message,
-            )
+            ),
+            task_id=subtask.id,
         )
 
-    def resume_subtask(self, subtask: Task) -> None:
-        """Resume the focused subtask."""
-        subtask.work_status = TaskWorkStatus.IN_PROGRESS
-
-    def send_subtask_message(self, message: str) -> None:
+    def send_subtask_message(self, message: str, add_event: bool = True) -> None:
         """Post a message to the focused subtask."""
         assert (
             self.focused_subtask is not None
@@ -1279,13 +1423,14 @@ class Orchestrator:
         self.focused_subtask.event_log.add(
             self.subtask_message(self.focused_subtask, message)
         )
-        self.resume_subtask(self.focused_subtask)
+        self.focused_subtask.resume(resuming_agent=self.id, add_event=add_event)
 
     def initiate_subtask(self, subtask: Task) -> None:
         """Initiate a subtask."""
         self.focused_subtask = subtask
         self.send_subtask_message(
-            "Hi, please feel free to ask me any questions about the context of this task—I've only given you a brief description to start with, but I can provide more information if you need it."
+            "Hi, please feel free to ask me any questions about the context of this task—I've only given you a brief description to start with, but I can provide more information if you need it.",
+            add_event=False,
         )
 
     def identify_new_subtask(self) -> ActionResult:
@@ -1314,7 +1459,8 @@ class Orchestrator:
                 owner_id=self.id,
                 subtask=extracted_subtask,
                 validation_result=subtask_validation,
-            )
+            ),
+            task_id=self.task.id,
         )
         if not subtask_validation.valid:
             return ActionResult(
@@ -1372,7 +1518,8 @@ class Orchestrator:
                 sender=self.task.owner_id,
                 recipient=self.id,
                 content=message,
-            )
+            ),
+            task_id=self.task.id,
         )
 
     def message_to_owner(self, message: str) -> Event:
@@ -1382,7 +1529,8 @@ class Orchestrator:
                 sender=self.id,
                 recipient=self.task.owner_id,
                 content=message,
-            )
+            ),
+            task_id=self.task.id,
         )
 
     _new_event_count = 0
@@ -1753,6 +1901,7 @@ class Aranea:
             assert (
                 task.executor is not None
             ), "Task executor must exist in order to be executed."
+            task.resume(resuming_agent=self.id, add_event=True)
             return await task.executor.execute(message)
 
         return Reply(
