@@ -57,6 +57,7 @@ class Concepts(Enum):
     RECENT_EVENTS_LOG = "RECENT EVENTS LOG"
     ORCHESTRATOR_INFORMATION_SECTIONS = "ORCHESTRATOR INFORMATION SECTIONS"
     FOCUSED_SUBTASK = "FOCUSED SUBTASK"
+    FOCUSED_SUBTASK_DISCUSSION_LOG = "FOCUSED SUBTASK DISCUSSION LOG"
 
 
 def print_messages(messages: Sequence[BaseMessage]) -> str:
@@ -691,6 +692,7 @@ class ActionReasoningNotes(Enum):
 
     OVERVIEW = "Provide a step-by-step, robust reasoning process for the orchestrator to sequentially think through the information it has access to so that it has the appropriate mental context for deciding what to do next. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind. Some things to note:"
     ACTION_RESTRICTIONS = "The final action that the orchestrator decides on MUST be one of the ORCHESTRATOR ACTIONS described above. The orchestrator cannot perform any other actions."
+    FOCUSED_SUBTASK_RESTRICTIONS = f"The orchestrator cannot directly change the {Concepts.FOCUSED_SUBTASK.value}. To focus on a different subtask, it must first use the {ActionName.PAUSE_SUBTASK_DISCUSSION} action first. Overall, the orchestrator should be focused on helping the EXECUTOR of the {Concepts.FOCUSED_SUBTASK.value}, and will need strong reason to change its focus."
     INFORMATION_RESTRICTIONS = f"Assume that the orchestrator has access to what's described in {Concepts.ORCHESTRATOR_INFORMATION_SECTIONS.value} above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3."
     TERM_REFERENCES = """The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section"); however, only capitalize terms that are capitalized in the information sections—don't use capitalization as emphasis."""
     SUBTASK_STATUS_INFO = f"Typically, tasks that are {TaskWorkStatus.COMPLETED.value}, {TaskWorkStatus.CANCELLED.value}, {TaskWorkStatus.IN_PROGRESS.value}, or {TaskWorkStatus.IN_VALIDATION.value} do not need immediate attention unless the orchestrator discovers information that changes the status of the subtask. Tasks that are {TaskWorkStatus.BLOCKED} will need action from the orchestrator to start or resume execution respectively."
@@ -709,14 +711,15 @@ You may add comments or thoughts before or after the reasoning process, but the 
 """.strip()
 
 
-class InfoSection(Enum):
-    """Information sections available to the orchestrator."""
+class OrchestratorInformationSection(Enum):
+    """Information sections available to orchestrators."""
 
     KNOWLEDGE = "KNOWLEDGE: background knowledge relating to the orchestrator's area of specialization. The information may or may not be relevant to the specific main task, but is provided as support for the orchestrator's decisionmaking."
     MAIN_TASK_DESCRIPTION = f"MAIN TASK DESCRIPTION: a description of information about the main task that the orchestrator has learned so far from the {Concepts.MAIN_TASK_OWNER.value}. This may NOT be a complete description of the main task, so the orchestrator must always take into account if there is enough information for performing its actions. Additional information may also be in the {Concepts.RECENT_EVENTS_LOG.value}, as messages from the main task owner."
     SUBTASKS = "SUBTASKS: a list of all subtasks that have been identified by the orchestrator so far; for each one, there is a high-level description of what must be done, as well as the subtask's status. This is not an exhaustive list of all required subtasks for the main task; there may be additional subtasks that are required. This list is automatically maintained and updated by a background process."
     RECENT_EVENTS_LOG = f"{Concepts.RECENT_EVENTS_LOG.value}: a log of recent events that have occurred during the execution of the task. This can include status updates for subtasks, messages from the main task owner, and the orchestrator's own previous thoughts/decisions."
     FOCUSED_SUBTASK = f"{Concepts.FOCUSED_SUBTASK.value}: the subtask that the orchestrator is currently focused on. This is the subtask that the orchestrator is currently thinking about and making decisions for. The orchestrator can only focus on one subtask at a time, and cannot perform actions on subtasks that it is not currently focused on."
+    FOCUSED_SUBTASK_FULL_DISCUSSION_LOG = f"{Concepts.FOCUSED_SUBTASK_DISCUSSION_LOG.value}: a log of the full discussion for the focused subtask between the orchestrator and the subtask executor. The most recent messages are also in the {Concepts.RECENT_EVENTS_LOG.value}, but this log contains the full discussion history."
 
 
 @dataclass
@@ -1031,10 +1034,10 @@ class Orchestrator:
     def default_mode_info_sections(self) -> str:
         """Basic information orchestrators in default state have access to."""
         template = f"""
-        - {InfoSection.KNOWLEDGE.value}
-        - {InfoSection.MAIN_TASK_DESCRIPTION.value}
-        - {InfoSection.SUBTASKS.value}
-        - {InfoSection.RECENT_EVENTS_LOG.value}
+        - {OrchestratorInformationSection.KNOWLEDGE.value}
+        - {OrchestratorInformationSection.MAIN_TASK_DESCRIPTION.value}
+        - {OrchestratorInformationSection.SUBTASKS.value}
+        - {OrchestratorInformationSection.RECENT_EVENTS_LOG.value}
         """
         return dedent_and_strip(template)
 
@@ -1042,11 +1045,12 @@ class Orchestrator:
     def subtask_mode_info_sections(self) -> str:
         """Basic information orchestrators in subtask discussion mode have access to."""
         template = f"""
-        - {InfoSection.KNOWLEDGE.value}
-        - {InfoSection.MAIN_TASK_DESCRIPTION.value}
-        - {InfoSection.SUBTASKS.value}
-        - {InfoSection.RECENT_EVENTS_LOG.value}
-        - {InfoSection.FOCUSED_SUBTASK.value}
+        - {OrchestratorInformationSection.KNOWLEDGE.value}
+        - {OrchestratorInformationSection.MAIN_TASK_DESCRIPTION.value}
+        - {OrchestratorInformationSection.SUBTASKS.value}
+        - {OrchestratorInformationSection.RECENT_EVENTS_LOG.value}
+        - {OrchestratorInformationSection.FOCUSED_SUBTASK.value}
+        - {OrchestratorInformationSection.FOCUSED_SUBTASK_FULL_DISCUSSION_LOG.value}
         """
         return dedent_and_strip(template)
 
@@ -1193,8 +1197,8 @@ class Orchestrator:
         actions = """
         - `{MESSAGE_SUBTASK_EXECUTOR}: "{{message}}"`: send a message to the EXECUTOR of the FOCUSED SUBTASK to gather or clarify information about the SUBTASK. {{message}} must be replaced with the message you want to send. _Note_: the EXECUTOR is only aware of its own FOCUSED SUBTASK, not _your_ MAIN TASK. From its perspective, the FOCUSED SUBTASK is _its_ MAIN TASK.
         - `{MESSAGE_TASK_OWNER}: "{{message}}"`: send a message to the MAIN TASK OWNER to gather or clarify information about the MAIN TASK. `{{message}}` must be replaced with the message you want to send.
+        - `{PAUSE_SUBTASK_DISCUSSION}: "{{reason}}"`: pause the discussion of the FOCUSED SUBTASK to either communicate with other subtask executors, the MAIN TASK OWNER, or to create a new subtask. The FOCUSED SUBTASK's discussion will be frozen, but can be resumed later. {{reason}} must be replaced with the reason for pausing the discussion, so that the orchestrator can remember why it paused the discussion when it resumes it later.
         - `{WAIT}`: do nothing until the next event from the FOCUSED SUBTASK.
-        - `{PAUSE_SUBTASK_DISCUSSION}`: pause the discussion of the FOCUSED SUBTASK to either communicate with other subtask executors, the MAIN TASK OWNER, or to create a new subtask. The FOCUSED SUBTASK's discussion will be frozen, but can be resumed later.
         """
         return dedent_and_strip(actions).format(
             MESSAGE_SUBTASK_EXECUTOR=ActionName.MESSAGE_SUBTASK_EXECUTOR.value,
@@ -1247,6 +1251,7 @@ class Orchestrator:
         - {ActionReasoningNotes.INFORMATION_RESTRICTIONS.value}
         - {ActionReasoningNotes.TERM_REFERENCES.value}
         - {ActionReasoningNotes.SUBTASK_STATUS_INFO.value}
+        - {ActionReasoningNotes.FOCUSED_SUBTASK_RESTRICTIONS.value}
         - {ActionReasoningNotes.STEPS_RESTRICTIONS.value}
         - {ActionReasoningNotes.PROCEDURAL_SCRIPTING.value}
         
@@ -1281,19 +1286,15 @@ class Orchestrator:
             )
         action_choice_core = self.blueprint.reasoning.subtask_action_choice
 
-
-
-
-
         breakpoint()
-        # > in ActionReasoningNotes.SUBTASK_STATUS_INFO, convert "task" to "subtask"
-        # subtask mode reasoning generation note: chat log is complete
-        # > The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistatn API.
-
+        # > when pausing subtask discussion, add event to both subtask and main task
+        # > when opening subtask discussion, add event to both subtask and main task
         breakpoint()
         return self.action_reasoning_template.format(
             action_choice_core=action_choice_core
         )
+        # > prompt adjustments > in ActionReasoningNotes.SUBTASK_STATUS_INFO, convert "task" to "subtask"
+        # > The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistatn API.
 
     @property
     def action_choice_reasoning(self) -> str:
