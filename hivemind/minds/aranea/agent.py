@@ -55,6 +55,8 @@ class Concepts(Enum):
     MAIN_TASK = "MAIN TASK"
     EXECUTOR = "EXECUTOR"
     RECENT_EVENTS_LOG = "RECENT EVENTS LOG"
+    ORCHESTRATOR_INFORMATION_SECTIONS = "ORCHESTRATOR INFORMATION SECTIONS"
+    FOCUSED_SUBTASK = "FOCUSED SUBTASK"
 
 
 def print_messages(messages: Sequence[BaseMessage]) -> str:
@@ -88,6 +90,7 @@ class Reasoning:
     """Reasoning instructions for an agent."""
 
     default_action_choice: str | None = None
+    subtask_action_choice: str | None = None
     subtask_extraction: str | None = None
 
 
@@ -570,6 +573,8 @@ class ActionName(Enum):
     MESSAGE_TASK_OWNER = "ASK_MAIN_TASK_OWNER"
     REPORT_MAIN_TASK_COMPLETE = "REPORT_MAIN_TASK_COMPLETE"
     WAIT = "WAIT"
+    MESSAGE_SUBTASK_EXECUTOR = "MESSAGE_SUBTASK_EXECUTOR"
+    PAUSE_SUBTASK_DISCUSSION = "PAUSE_SUBTASK_DISCUSSION"
 
 
 ORCHESTRATOR_CONCEPTS = f"""
@@ -584,14 +589,6 @@ ORCHESTRATOR_CONCEPTS = f"""
   - {TaskWorkStatus.CANCELLED.value}: the subtask has been cancelled for various reason and will not be done.
 - SUBTASK EXECUTOR: an agent that is responsible for executing a subtask. Subtask executors specialize in executing certain types of tasks; whenever a subtask is identified, an executor is automatically assigned to it without any action required from the orchestrator.
 - {Concepts.MAIN_TASK_OWNER.value}: the one who requested the main task to be done. The orchestrator must communicate with the task owner to gather background information required to complete the main task.
-""".strip()
-#   - {TaskWorkStatus.IDENTIFIED.value}: the subtask has been newly identified and has not started execution yet.
-
-ORCHESTRATOR_INFORMATION_SECTIONS = f"""
-- KNOWLEDGE: background knowledge relating to the orchestrator's area of specialization. The information may or may not be relevant to the specific main task, but is provided as support for the orchestrator's decisionmaking.
-- MAIN TASK DESCRIPTION: a description of information about the main task that the orchestrator has learned so far from the {Concepts.MAIN_TASK_OWNER.value}. This may NOT be a complete description of the main task, so the orchestrator must always take into account if there is enough information for performing its actions. Additional information may also be in the {Concepts.RECENT_EVENTS_LOG.value}, as messages from the main task owner.
-- SUBTASKS: a list of all subtasks that have been identified by the orchestrator so far; for each one, there is a high-level description of what must be done, as well as the subtask's status. This is not an exhaustive list of all required subtasks for the main task; there may be additional subtasks that are required. This list is automatically maintained and updated by a background process.
-- {Concepts.RECENT_EVENTS_LOG.value}: a log of recent events that have occurred during the execution of the task. This can include status updates for subtasks, messages from the main task owner, and the orchestrator's own previous thoughts/decisions.
 """.strip()
 
 
@@ -618,16 +615,6 @@ def query_and_extract_reasoning(
     return extracted_result[0]
 
 
-BASE_ORCHESTRATOR_INFO = f"""
-## CONCEPTS:
-{ORCHESTRATOR_CONCEPTS}
-
-## ORCHESTRATOR INFORMATION SECTIONS:
-By default, the orchestrator has access to the following information. Note that all information here is read-only; while identifying new subtasks, the orchestrator cannot modify any of the information here.
-{ORCHESTRATOR_INFORMATION_SECTIONS}
-""".strip()
-
-
 class ActionModeName(Enum):
     """States of an action."""
 
@@ -635,106 +622,14 @@ class ActionModeName(Enum):
     SUBTASK_DISCUSSION = "SUBTASK DISCUSSION"
 
 
-def generate_action_reasoning(
-    role: Role, state: ActionModeName, actions: str, printout: bool = False
-) -> str:
-    """Generate reasoning for choosing an action."""
-    if role == Role.ORCHESTRATOR and state == ActionModeName.DEFAULT:
-        context = """
-        ## MISSION:
-        You are the instructor for an AI task orchestration agent. Your purpose is to provide step-by-step guidance for the agent to think through what it must do next.
-
-        {base_info}
-
-        ## ORCHESTRATOR ACTIONS:
-        In its default state, the orchestrator can perform the following actions:
-        {actions}
-        """
-        request = f"""
-        ## REQUEST FOR YOU:
-        Provide a step-by-step, robust reasoning process for the orchestrator to sequentially think through the information it has access to so that it has the appropriate mental context for deciding what to do next. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind. Some things to note:
-        - The final action that the orchestrator decides on MUST be one of the ORCHESTRATOR ACTIONS described above. The orchestrator cannot perform any other actions.
-        - Assume that the orchestrator has access to the information described above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3.
-        - The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section"); however, only capitalize terms that are capitalized in the information sections—don't use capitalization as emphasis.
-        - Typically, tasks that are {TaskWorkStatus.COMPLETED.value}, {TaskWorkStatus.CANCELLED.value}, {TaskWorkStatus.IN_PROGRESS.value}, or {TaskWorkStatus.IN_VALIDATION.value} do not need immediate attention unless the orchestrator discovers information that changes the status of the subtask. Tasks that are {TaskWorkStatus.BLOCKED} will need action from the orchestrator to start or resume execution respectively.
-        - The reasoning process should be written in second person and be around 5-7 steps, though you can add substeps within a step (a, b, c, etc.) if it is complex.
-        - The reasoning steps can refer to the results of previous steps, and it may be effective to build up the orchestrator's mental context step by step, starting from basic information available, similar to writing a procedural script for a program but in natural language instead of code.
-
-        Provide the reasoning process in the following format:
-        ```start_of_reasoning_process
-        1. {{reasoning step 1}}
-        2. {{reasoning step 2}}
-        3. [... etc.]
-        ```end_of_reasoning_process
-        You may add comments or thoughts before or after the reasoning process, but the reasoning process block itself must only contain the reasoning steps, directed at the orchestrator.
-        """
-        messages = [
-            SystemMessage(
-                content=dedent_and_strip(context).format(
-                    base_info=BASE_ORCHESTRATOR_INFO,
-                    actions=actions,
-                )
-            ),
-            SystemMessage(content=dedent_and_strip(request)),
-        ]
-        return query_and_extract_reasoning(
-            messages,
-            preamble=f"Generating reasoning for {role.value} in {state.value} state...\n{print_messages(messages)}",
-            printout=printout,
-        )
-    raise NotImplementedError
-
+ORCHESTRATOR_INSTRUCTOR_MISSION = """
+You are the instructor for an AI task orchestration agent. Your purpose is to provide step-by-step guidance for the agent to think through what it must do next.""".strip()
 
 MODULAR_SUBTASK_IDENTIFICATION = """
 "Modular Subtask Identification" (MSI) is a philosophy for identifying a required subtask from a main task that emphasizes two principles:
 - orthogonality: the identified subtask is as independent from the rest of the uncompleted main task as possible. This allows it to be executed in isolation without requiring any other subtasks to be completed first.
 - small input/output footprint: the identified subtask has a small input and output footprint, meaning that it requires little information to be provided to it, and provides compact output. This reduces the amount of context needed to understand the subtask and its results.
 """.strip()
-
-
-def generate_subtask_extraction_reasoning(printout: bool = False) -> str:
-    """Generate reasoning for choosing an action."""
-    context = """
-    ## MISSION:
-    You are the instructor for an AI task orchestration agent. Your purpose is to provide step-by-step guidance for the agent to think through how to identify the next subtask from the main task description.
-
-    {base_info}
-
-    ## MODULAR SUBTASK INDENTIFICATION PHILOSOPHY:
-    {msi}
-
-    """
-    request = """
-    ## REQUEST FOR YOU:
-    Provide a step-by-step, robust reasoning process for the orchestrator to a) sequentially process the information in the information sections it has access to so that it can identify a new subtask that is not yet identified, and b) understand what MSI is and follow its principles. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind before they perform subtask identification. Some things to note:
-    - Assume that the orchestrator has access to the information described above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3.
-    - The orchestrator requires precise references to information in its information sections, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section").
-    - In its current state, the orchestrator is not able to perform any other actions besides subtask identification and the reasoning preceeding it.
-    - The reasoning process should be written in second person and be around 5-7 steps, though you can add substeps (a, b, c, etc.) within a step if it is complex.
-    - The reasoning steps can refer to the results of previous steps, and it may be effective to build up the orchestrator's mental context step by step, starting from basic information available, similar to writing a procedural script for a program but in natural language instead of code.
-    - The orchestrator should only perform the subtask identification on the _last_ step, after it has considered _all_ the information it needs. No other actions need to be performed after subtask identification.
-    Provide the reasoning process in the following format:
-    ```start_of_reasoning_process
-    1. {reasoning step 1}
-    2. {reasoning step 2}
-    3. [... etc.]
-    ```end_of_reasoning_process
-    You may add comments or thoughts before or after the reasoning process, but the reasoning process block itself must only contain the reasoning steps, directed at the orchestrator.
-    """
-    messages = [
-        SystemMessage(
-            content=dedent_and_strip(context).format(
-                base_info=BASE_ORCHESTRATOR_INFO,
-                msi=MODULAR_SUBTASK_IDENTIFICATION,
-            )
-        ),
-        SystemMessage(content=dedent_and_strip(request)),
-    ]
-    return query_and_extract_reasoning(
-        messages,
-        preamble=f"Generating subtask extraction reasoning...\n{print_messages(messages)}",
-        printout=printout,
-    )
 
 
 @dataclass(frozen=True)
@@ -791,6 +686,39 @@ class ActionResult:
     # new_event_status: TaskEventStatus | None = None
 
 
+class ActionReasoningNotes(Enum):
+    """Notes for action reasoning."""
+
+    OVERVIEW = "Provide a step-by-step, robust reasoning process for the orchestrator to sequentially think through the information it has access to so that it has the appropriate mental context for deciding what to do next. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind. Some things to note:"
+    ACTION_RESTRICTIONS = "The final action that the orchestrator decides on MUST be one of the ORCHESTRATOR ACTIONS described above. The orchestrator cannot perform any other actions."
+    INFORMATION_RESTRICTIONS = f"Assume that the orchestrator has access to what's described in {Concepts.ORCHESTRATOR_INFORMATION_SECTIONS.value} above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3."
+    TERM_REFERENCES = """The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section"); however, only capitalize terms that are capitalized in the information sections—don't use capitalization as emphasis."""
+    SUBTASK_STATUS_INFO = f"Typically, tasks that are {TaskWorkStatus.COMPLETED.value}, {TaskWorkStatus.CANCELLED.value}, {TaskWorkStatus.IN_PROGRESS.value}, or {TaskWorkStatus.IN_VALIDATION.value} do not need immediate attention unless the orchestrator discovers information that changes the status of the subtask. Tasks that are {TaskWorkStatus.BLOCKED} will need action from the orchestrator to start or resume execution respectively."
+    STEPS_RESTRICTIONS = "The reasoning process should be written in second person and be around 5-7 steps, though you can add substeps within a step (a, b, c, etc.) if it is complex."
+    PROCEDURAL_SCRIPTING = "The reasoning steps can refer to the results of previous steps, and it may be effective to build up the orchestrator's mental context step by step, starting from basic information available, similar to writing a procedural script for a program but in natural language instead of code."
+
+
+REASONING_OUTPUT_INSTRUCTIONS = """
+Provide the reasoning process in the following format:
+```start_of_reasoning_process
+1. {reasoning step 1}
+2. {reasoning step 2}
+3. [... etc.]
+```end_of_reasoning_process
+You may add comments or thoughts before or after the reasoning process, but the reasoning process block itself must only contain the reasoning steps, directed at the orchestrator.
+""".strip()
+
+
+class InfoSection(Enum):
+    """Information sections available to the orchestrator."""
+
+    KNOWLEDGE = "KNOWLEDGE: background knowledge relating to the orchestrator's area of specialization. The information may or may not be relevant to the specific main task, but is provided as support for the orchestrator's decisionmaking."
+    MAIN_TASK_DESCRIPTION = f"MAIN TASK DESCRIPTION: a description of information about the main task that the orchestrator has learned so far from the {Concepts.MAIN_TASK_OWNER.value}. This may NOT be a complete description of the main task, so the orchestrator must always take into account if there is enough information for performing its actions. Additional information may also be in the {Concepts.RECENT_EVENTS_LOG.value}, as messages from the main task owner."
+    SUBTASKS = "SUBTASKS: a list of all subtasks that have been identified by the orchestrator so far; for each one, there is a high-level description of what must be done, as well as the subtask's status. This is not an exhaustive list of all required subtasks for the main task; there may be additional subtasks that are required. This list is automatically maintained and updated by a background process."
+    RECENT_EVENTS_LOG = f"{Concepts.RECENT_EVENTS_LOG.value}: a log of recent events that have occurred during the execution of the task. This can include status updates for subtasks, messages from the main task owner, and the orchestrator's own previous thoughts/decisions."
+    FOCUSED_SUBTASK = f"{Concepts.FOCUSED_SUBTASK.value}: the subtask that the orchestrator is currently focused on. This is the subtask that the orchestrator is currently thinking about and making decisions for. The orchestrator can only focus on one subtask at a time, and cannot perform actions on subtasks that it is not currently focused on."
+
+
 @dataclass
 class Orchestrator:
     """A recursively auto-specializing Aranea subagent."""
@@ -799,7 +727,6 @@ class Orchestrator:
     task: Task
     files_parent_dir: Path
     delegator: "Delegator"
-
     focused_subtask: Task | None = None
 
     @classmethod
@@ -1058,7 +985,7 @@ class Orchestrator:
         """Actions available in the default mode."""
         actions = """
         - `{IDENTIFY_NEW_SUBTASK}`: identify a new subtask from the MAIN TASK that is not yet on the existing subtask list. This adds the subtask to the list and begins a discussion thread with the subtask's executor to start work on the task.
-        - `{START_DISCUSSION_FOR_SUBTASK}: "{{id}}"`: open a discussion thread with a subtask's executor, which allows you to exchange information about the subtask, and then optionally updating its status at the end of the discussion—starting, pausing, resuming, cancelling, etc. {{id}} must be replaced with the id of the subtask to be discussed.
+        - `{START_DISCUSSION_FOR_SUBTASK}: "{{id}}"`: open a discussion thread with a subtask's executor, which allows you to exchange information about the subtask. {{id}} must be replaced with the id of the subtask to be discussed.
         - `{MESSAGE_TASK_OWNER}: "{{message}}"`: send a message to the MAIN TASK OWNER to gather or clarify information about the task. {{message}} must be replaced with the message you want to send.
         - `{REPORT_MAIN_TASK_COMPLETE}`: report the main task as complete.
         - `{WAIT}`: do nothing until the next event from an executor or the MAIN TASK OWNER.
@@ -1075,16 +1002,8 @@ class Orchestrator:
         )
 
     @property
-    def default_action_reasoning(self) -> str:
-        """Prompt for choosing an action in the default mode."""
-        if not self.blueprint.reasoning.default_action_choice:
-            self.blueprint.reasoning.default_action_choice = generate_action_reasoning(
-                self.role,
-                ActionModeName.DEFAULT,
-                self.default_mode_actions,
-                printout=VERBOSE,
-            )
-        action_choice_core = self.blueprint.reasoning.default_action_choice
+    def action_reasoning_template(self) -> str:
+        """Template for action reasoning."""
         template = """
         Use the following reasoning process to decide what to do next:
         ```start_of_reasoning_steps
@@ -1106,7 +1025,107 @@ class Orchestrator:
         ```end_of_action_choice_output
         Any additional comments or thoughts can be added before or after the output blocks.
         """
-        return dedent_and_strip(template).format(action_choice_core=action_choice_core)
+        return dedent_and_strip(template)
+
+    @property
+    def default_mode_info_sections(self) -> str:
+        """Basic information orchestrators in default state have access to."""
+        template = f"""
+        - {InfoSection.KNOWLEDGE.value}
+        - {InfoSection.MAIN_TASK_DESCRIPTION.value}
+        - {InfoSection.SUBTASKS.value}
+        - {InfoSection.RECENT_EVENTS_LOG.value}
+        """
+        return dedent_and_strip(template)
+
+    @property
+    def subtask_mode_info_sections(self) -> str:
+        """Basic information orchestrators in subtask discussion mode have access to."""
+        template = f"""
+        - {InfoSection.KNOWLEDGE.value}
+        - {InfoSection.MAIN_TASK_DESCRIPTION.value}
+        - {InfoSection.SUBTASKS.value}
+        - {InfoSection.RECENT_EVENTS_LOG.value}
+        - {InfoSection.FOCUSED_SUBTASK.value}
+        """
+        return dedent_and_strip(template)
+
+    @property
+    def info_sections(self) -> str:
+        """Basic information orchestrators have access to."""
+        if self.focused_subtask:
+            return self.subtask_mode_info_sections
+        return self.default_mode_info_sections
+
+    def base_orchestator_info(self) -> str:
+        """Basic information orchestrators have access to."""
+        template = f"""
+        ## CONCEPTS:
+        {{orchestrator_concepts}}
+
+        ## {Concepts.ORCHESTRATOR_INFORMATION_SECTIONS.value}:
+        By default, the orchestrator has access to the following information. Note that all information here is read-only; while identifying new subtasks, the orchestrator cannot modify any of the information here.
+        {{orchestrator_information_sections}}
+        """
+        return dedent_and_strip(template).format(
+            orchestrator_concepts=ORCHESTRATOR_CONCEPTS,
+            orchestrator_information_sections=self.info_sections,
+        )
+
+    def generate_default_action_reasoning(self) -> str:
+        """Generate reasoning for choosing an action in the default state."""
+        context = """
+        ## MISSION:
+        {mission}
+
+        {base_info}
+
+        ## ORCHESTRATOR ACTIONS:
+        In its default state, the orchestrator can perform the following actions:
+        {actions}
+        """
+        request = f"""
+        ## REQUEST FOR YOU:
+        {ActionReasoningNotes.OVERVIEW.value}
+        - {ActionReasoningNotes.ACTION_RESTRICTIONS.value}
+        - {ActionReasoningNotes.INFORMATION_RESTRICTIONS.value}
+        - {ActionReasoningNotes.TERM_REFERENCES.value}
+        - {ActionReasoningNotes.SUBTASK_STATUS_INFO.value}
+        - {ActionReasoningNotes.STEPS_RESTRICTIONS.value}
+        - {ActionReasoningNotes.PROCEDURAL_SCRIPTING.value}
+
+        {{output_instructions}}
+        """
+        messages = [
+            SystemMessage(
+                content=dedent_and_strip(context).format(
+                    mission=ORCHESTRATOR_INSTRUCTOR_MISSION,
+                    base_info=self.base_orchestator_info(),
+                    actions=self.default_mode_actions,
+                )
+            ),
+            SystemMessage(
+                content=dedent_and_strip(request).format(
+                    output_instructions=REASONING_OUTPUT_INSTRUCTIONS,
+                )
+            ),
+        ]
+        return query_and_extract_reasoning(
+            messages,
+            preamble=f"Generating reasoning for {self.role.value} in {ActionModeName.DEFAULT.value} state...\n{print_messages(messages)}",
+            printout=VERBOSE,
+        )
+
+    @property
+    def default_action_reasoning(self) -> str:
+        """Prompt for choosing an action in the default mode."""
+        if not self.blueprint.reasoning.default_action_choice:
+            self.blueprint.reasoning.default_action_choice = (
+                self.generate_default_action_reasoning()
+            )
+        return self.action_reasoning_template.format(
+            action_choice_core=self.blueprint.reasoning.default_action_choice
+        )
 
     @property
     def default_action_context(self) -> str:
@@ -1135,14 +1154,14 @@ class Orchestrator:
         """Discussion of the focused subtask."""
         assert self.focused_subtask is not None
         template = """
-        ## SUBTASK DISCUSSION:
-        The following subtask is currently being discussed:
+        ## FOCUSED SUBTASK:
+        You are currently focusing on the following subtask:
         ```start_of_subtask_information
         {subtask_information}
         ```end_of_subtask_information
 
-        ### FULL SUBTASK DISCUSSION LOG:
-        Below is a complete log of the discussion so far. Some messages may overlap with the RECENT EVENTS LOG above.
+        ### FOCUSED SUBTASK FULL DISCUSSION LOG:
+        Below is a complete log of the discussion of the FOCUSED SUBTASK so far. Some messages may overlap with the RECENT EVENTS LOG above, but this log has all messages related to the FOCUSED SUBTASK rather than just the most recent.
         ```start_of_subtask_discussion_log
         {subtask_discussion}
         ```end_of_subtask_discussion_log
@@ -1169,9 +1188,24 @@ class Orchestrator:
         )
 
     @property
+    def subtask_mode_actions(self) -> str:
+        """Actions available in subtask discussion mode."""
+        actions = """
+        - `{MESSAGE_SUBTASK_EXECUTOR}: "{{message}}"`: send a message to the EXECUTOR of the FOCUSED SUBTASK to gather or clarify information about the SUBTASK. {{message}} must be replaced with the message you want to send. _Note_: the EXECUTOR is only aware of its own FOCUSED SUBTASK, not _your_ MAIN TASK. From its perspective, the FOCUSED SUBTASK is _its_ MAIN TASK.
+        - `{MESSAGE_TASK_OWNER}: "{{message}}"`: send a message to the MAIN TASK OWNER to gather or clarify information about the MAIN TASK. `{{message}}` must be replaced with the message you want to send.
+        - `{WAIT}`: do nothing until the next event from the FOCUSED SUBTASK.
+        - `{PAUSE_SUBTASK_DISCUSSION}`: pause the discussion of the FOCUSED SUBTASK to either communicate with other subtask executors, the MAIN TASK OWNER, or to create a new subtask. The FOCUSED SUBTASK's discussion will be frozen, but can be resumed later.
+        """
+        return dedent_and_strip(actions).format(
+            MESSAGE_SUBTASK_EXECUTOR=ActionName.MESSAGE_SUBTASK_EXECUTOR.value,
+            MESSAGE_TASK_OWNER=ActionName.MESSAGE_TASK_OWNER.value,
+            WAIT=ActionName.WAIT.value,
+            PAUSE_SUBTASK_DISCUSSION=ActionName.PAUSE_SUBTASK_DISCUSSION.value,
+        )
+
+    @property
     def subtask_action_context(self) -> str:
         """Context for choosing an action in subtask discussion mode."""
-
         template = """
         {subtask_mode_status}
 
@@ -1179,26 +1213,9 @@ class Orchestrator:
         These are the actions you can currently perform.
         {subtask_mode_actions}
         """
-
-        breakpoint()
-        # add event for opening a subtask
-        # subtask mode action: send message
-        # > when selecting executor, task success is based on similar tasks that executor dealt with before
-        # > subtask instruction generation note: log is complete
-        # > add fake timestamps
-        # `{MESSAGE_TASK_OWNER}: "{{message}}"`: send a message to the MAIN TASK OWNER to gather or clarify information about the task. {{message}} must be replaced with the message you want to send.
-        # > awaiting current subtask is different description than awaiting subtask in default mode # reference awaiting specific subtask
-        # > `{WAIT}`: do nothing until the next event from an executor or the MAIN TASK OWNER.
-        # subtask discussion mode doesn't have other subtasks > always refer to subtask as "this task" > remove all extraneous references that aren't relevant
-        # > display all subtask discussion in recent events log
-        # answering questions from executor
-        # > subtask mode action: close subtask > adds event that is a summary of the new items in the discussion
-
-        # > "the Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistatn API."
-
         return dedent_and_strip(template).format(
-            subtask_modestatus=self.subtask_mode_status,
-            subtask_actions=self.subtask_actions,
+            subtask_mode_status=self.subtask_mode_status,
+            subtask_mode_actions=self.subtask_mode_actions,
         )
 
     @property
@@ -1210,11 +1227,84 @@ class Orchestrator:
             return self.default_action_context
         raise NotImplementedError(f"task: {self.task.description}")
 
+    def generate_subtask_action_reasoning(self) -> str:
+        """Generate reasoning for choosing an action in subtask discussion mode."""
+        context = """
+        ## MISSION:
+        {mission}
+
+        {base_info}
+
+        ## ORCHESTRATOR ACTIONS:
+        The orchestrator is currently in a mode where it is discussing its FOCUSED SUBTASK with the SUBTASK EXECUTOR. Currently, the orchestrator can perform the following actions:
+        {actions}
+        """
+
+        request = f"""
+        ## REQUEST FOR YOU:
+        {ActionReasoningNotes.OVERVIEW.value}
+        - {ActionReasoningNotes.ACTION_RESTRICTIONS.value}
+        - {ActionReasoningNotes.INFORMATION_RESTRICTIONS.value}
+        - {ActionReasoningNotes.TERM_REFERENCES.value}
+        - {ActionReasoningNotes.SUBTASK_STATUS_INFO.value}
+        - {ActionReasoningNotes.STEPS_RESTRICTIONS.value}
+        - {ActionReasoningNotes.PROCEDURAL_SCRIPTING.value}
+        
+        {{output_instructions}}
+        """
+        messages = [
+            SystemMessage(
+                content=dedent_and_strip(context).format(
+                    mission=ORCHESTRATOR_INSTRUCTOR_MISSION,
+                    base_info=self.base_orchestator_info(),
+                    actions=self.subtask_mode_actions,
+                )
+            ),
+            SystemMessage(
+                content=dedent_and_strip(request).format(
+                    output_instructions=REASONING_OUTPUT_INSTRUCTIONS,
+                )
+            ),
+        ]
+        return query_and_extract_reasoning(
+            messages,
+            preamble=f"Generating reasoning for {self.role.value} in {ActionModeName.DEFAULT.value} state...\n{print_messages(messages)}",
+            printout=VERBOSE,
+        )
+
+    @property
+    def subtask_action_reasoning(self) -> str:
+        """Reasoning for choosing an action in subtask discussion mode."""
+        if not self.blueprint.reasoning.subtask_action_choice:
+            self.blueprint.reasoning.subtask_action_choice = (
+                self.generate_subtask_action_reasoning()
+            )
+        action_choice_core = self.blueprint.reasoning.subtask_action_choice
+
+
+
+
+
+        breakpoint()
+        # > in ActionReasoningNotes.SUBTASK_STATUS_INFO, convert "task" to "subtask"
+        # subtask mode reasoning generation note: chat log is complete
+        # > The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistatn API.
+
+        breakpoint()
+        return self.action_reasoning_template.format(
+            action_choice_core=action_choice_core
+        )
+
     @property
     def action_choice_reasoning(self) -> str:
         """Prompt for choosing an action."""
+        if self.focused_subtask:
+            return self.subtask_action_reasoning
         if self.action_mode == ActionModeName.DEFAULT:
             return self.default_action_reasoning
+
+        breakpoint()
+
         raise NotImplementedError
 
     def choose_action(self) -> ActionDecision:
@@ -1223,6 +1313,16 @@ class Orchestrator:
             SystemMessage(content=self.action_choice_context),
             SystemMessage(content=self.action_choice_reasoning),
         ]
+        if self.focused_subtask:
+            breakpoint()
+
+        # breakpoint()
+        # > add event for opening a subtask
+        # > when selecting executor, task success is based on similar tasks that executor dealt with before
+        # > add fake timestamps
+        # > close subtask: adds event that is a summary of the new items in the discussion to maintain state continuity
+        # > refactor enums to not use value (__str__ function)
+
         action_choice = query_model(
             model=precise_model,
             messages=messages,
@@ -1280,12 +1380,56 @@ class Orchestrator:
             msi=MODULAR_SUBTASK_IDENTIFICATION,
         )
 
+    def generate_subtask_extraction_reasoning(self, printout: bool = False) -> str:
+        """Generate reasoning for extracting a subtask."""
+        context = """
+        ## MISSION:
+        You are the instructor for an AI task orchestration agent. Your purpose is to provide step-by-step guidance for the agent to think through how to identify the next subtask from the main task description.
+
+        {base_info}
+
+        ## MODULAR SUBTASK INDENTIFICATION PHILOSOPHY:
+        {msi}
+
+        """
+        request = f"""
+        ## REQUEST FOR YOU:
+        Provide a step-by-step, robust reasoning process for the orchestrator to a) sequentially process the information in the information sections it has access to so that it can identify a new subtask that is not yet identified, and b) understand what MSI is and follow its principles. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind before they perform subtask identification. Some things to note:
+        - Assume that the orchestrator has access to what's described in {Concepts.ORCHESTRATOR_INFORMATION_SECTIONS.value} above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3.
+        - The orchestrator requires precise references to information in its information sections, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section").
+        - In its current state, the orchestrator is not able to perform any other actions besides subtask identification and the reasoning preceeding it.
+        - The reasoning process should be written in second person and be around 5-7 steps, though you can add substeps (a, b, c, etc.) within a step if it is complex.
+        - The reasoning steps can refer to the results of previous steps, and it may be effective to build up the orchestrator's mental context step by step, starting from basic information available, similar to writing a procedural script for a program but in natural language instead of code.
+        - The orchestrator should only perform the subtask identification on the _last_ step, after it has considered _all_ the information it needs. No other actions need to be performed after subtask identification.
+        Provide the reasoning process in the following format:
+        ```start_of_reasoning_process
+        1. {{reasoning step 1}}
+        2. {{reasoning step 2}}
+        3. [... etc.]
+        ```end_of_reasoning_process
+        You may add comments or thoughts before or after the reasoning process, but the reasoning process block itself must only contain the reasoning steps, directed at the orchestrator.
+        """
+        messages = [
+            SystemMessage(
+                content=dedent_and_strip(context).format(
+                    base_info=self.base_orchestator_info(),
+                    msi=MODULAR_SUBTASK_IDENTIFICATION,
+                )
+            ),
+            SystemMessage(content=dedent_and_strip(request)),
+        ]
+        return query_and_extract_reasoning(
+            messages,
+            preamble=f"Generating subtask extraction reasoning...\n{print_messages(messages)}",
+            printout=printout,
+        )
+
     @property
     def subtask_extraction_reasoning(self) -> str:
         """Prompt for extracting a subtask."""
         if not self.blueprint.reasoning.subtask_extraction:
             self.blueprint.reasoning.subtask_extraction = (
-                generate_subtask_extraction_reasoning(printout=VERBOSE)
+                self.generate_subtask_extraction_reasoning(printout=VERBOSE)
             )
         template = """
         Use the following reasoning process to decide what to do next:
@@ -2160,7 +2304,7 @@ def test_default_action_reasoning() -> None:
 
 def test_generate_extraction_reasoning() -> None:
     """Run test."""
-    generate_subtask_extraction_reasoning(printout=True)
+    raise NotImplementedError
 
 
 def test_human_cache_response():
