@@ -8,7 +8,7 @@ from enum import Enum
 from dataclasses import dataclass, asdict, field
 from functools import cached_property
 from pathlib import Path
-from uuid import uuid4 as generate_uuid
+from uuid import UUID
 from typing import (
     Iterable,
     Iterator,
@@ -34,14 +34,19 @@ from hivemind.toolkit.models import super_creative_model, precise_model, query_m
 from hivemind.toolkit.text_extraction import ExtractionError, extract_blocks
 from hivemind.toolkit.text_formatting import dedent_and_strip
 from hivemind.toolkit.yaml_tools import yaml
-from hivemind.toolkit.timestamp import utc_timestamp
+from hivemind.toolkit.id_generation import (
+    utc_timestamp,
+    IdGenerator as DefaultIdGenerator,
+)
 
 BlueprintId = NewType("BlueprintId", str)
 TaskId = NewType("TaskId", str)
 EventId = NewType("EventId", str)
+DelegatorId = NewType("DelegatorId", str)
 RuntimeId = NewType("RuntimeId", str)
 TaskHistory = list[TaskId]
-IdTypeT = TypeVar("IdTypeT", BlueprintId, TaskId, EventId)
+IdGenerator = Callable[[], UUID]
+IdTypeT = TypeVar("IdTypeT", BlueprintId, TaskId, EventId, DelegatorId)
 
 AGENT_COLOR = Fore.MAGENTA
 VERBOSE = True
@@ -67,9 +72,11 @@ def print_messages(messages: Sequence[BaseMessage]) -> str:
     )
 
 
-def generate_aranea_id(id_type: type[IdTypeT]) -> IdTypeT:
+def generate_aranea_id(
+    id_type: type[IdTypeT], id_generator: Callable[[], UUID]
+) -> IdTypeT:
     """Generate an ID for an agent."""
-    return id_type(f"{str(generate_uuid())}")
+    return id_type(f"{str(id_generator())}")
 
 
 class ValidationResult(NamedTuple):
@@ -107,7 +114,12 @@ class Blueprint:
     knowledge: str
     recent_events_size: int
     auto_wait: bool
-    id: BlueprintId = field(default_factory=lambda: generate_aranea_id(BlueprintId))
+    id_generator: IdGenerator
+    id: BlueprintId = field(init=False)
+
+    def __post_init__(self) -> None:
+        """Post init."""
+        self.id = generate_aranea_id(BlueprintId, self.id_generator)
 
 
 class TaskWorkStatus(Enum):
@@ -193,8 +205,13 @@ class Event:
 
     data: EventData
     task_id: TaskId
+    id_generator: IdGenerator
+    id: EventId = field(init=False)
     timestamp: str = field(default_factory=utc_timestamp)
-    id: EventId = field(default_factory=lambda: generate_aranea_id(EventId))
+
+    def __post_init__(self) -> None:
+        """Post init."""
+        self.id = generate_aranea_id(EventId, self.id_generator)
 
     def __str__(self) -> str:
         # return f"[{self.timestamp}] {self.data}"
@@ -302,7 +319,7 @@ class TaskList:
         """Whether the task list is empty."""
         return bool(self.items)
 
-    def filter_by_status(self, status: TaskWorkStatus) -> Self:
+    def filter_by_status(self, status: TaskWorkStatus) -> "TaskList":
         """Filter the task list by status."""
         return TaskList(
             items=[task for task in self.items if task.work_status == status]
@@ -321,7 +338,7 @@ class EventLog:
         return self.events[-1] if self.events else None
 
     @property
-    def messages(self) -> Self:
+    def messages(self) -> "EventLog":
         """Messages in the event log."""
         return EventLog(
             events=[event for event in self.events if isinstance(event.data, Message)]
@@ -352,7 +369,7 @@ class EventLog:
         """String representation of the event log."""
         return "\n".join([str(event) for event in self.events]) if self.events else NONE
 
-    def recent(self, num_recent: int) -> Self:
+    def recent(self, num_recent: int) -> "EventLog":
         """Recent events."""
         return EventLog(events=self.events[-num_recent:])
 
@@ -412,12 +429,17 @@ class Task:
     owner_id: RuntimeId
     rank_limit: int | None
     validator: WorkValidator
+    id_generator: IdGenerator
+    id: TaskId = field(init=False)
     name: str | None = None
-    id: TaskId = field(default_factory=lambda: generate_aranea_id(TaskId))
     executor: Executor | None = None
     notes: dict[str, str] = field(default_factory=dict)
     work_status: TaskWorkStatus = TaskWorkStatus.IDENTIFIED
     # event_status: TaskEventStatus = TaskEventStatus.NONE
+
+    def __post_init__(self) -> None:
+        """Post init."""
+        self.id = generate_aranea_id(TaskId, self.id_generator)
 
     @cached_property
     def event_log(self) -> EventLog:
@@ -524,6 +546,7 @@ class Task:
                         new_status=TaskWorkStatus.IN_PROGRESS,
                     ),
                     task_id=self.id,
+                    id_generator=self.id_generator,
                 )
             )
         self.work_status = TaskWorkStatus.IN_PROGRESS
@@ -1061,7 +1084,8 @@ class Orchestrator:
             return self.subtask_mode_info_sections
         return self.default_mode_info_sections
 
-    def base_orchestator_info(self) -> str:
+    @property
+    def base_info(self) -> str:
         """Basic information orchestrators have access to."""
         template = f"""
         ## CONCEPTS:
@@ -1104,7 +1128,7 @@ class Orchestrator:
             SystemMessage(
                 content=dedent_and_strip(context).format(
                     mission=ORCHESTRATOR_INSTRUCTOR_MISSION,
-                    base_info=self.base_orchestator_info(),
+                    base_info=self.base_info,
                     actions=self.default_mode_actions,
                 )
             ),
@@ -1261,7 +1285,7 @@ class Orchestrator:
             SystemMessage(
                 content=dedent_and_strip(context).format(
                     mission=ORCHESTRATOR_INSTRUCTOR_MISSION,
-                    base_info=self.base_orchestator_info(),
+                    base_info=self.base_info,
                     actions=self.subtask_mode_actions,
                 )
             ),
@@ -1285,16 +1309,9 @@ class Orchestrator:
                 self.generate_subtask_action_reasoning()
             )
         action_choice_core = self.blueprint.reasoning.subtask_action_choice
-
-        breakpoint()
-        # > when pausing subtask discussion, add event to both subtask and main task
-        # > when opening subtask discussion, add event to both subtask and main task
-        breakpoint()
         return self.action_reasoning_template.format(
             action_choice_core=action_choice_core
         )
-        # > prompt adjustments > in ActionReasoningNotes.SUBTASK_STATUS_INFO, convert "task" to "subtask"
-        # > The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistatn API.
 
     @property
     def action_choice_reasoning(self) -> str:
@@ -1303,9 +1320,6 @@ class Orchestrator:
             return self.subtask_action_reasoning
         if self.action_mode == ActionModeName.DEFAULT:
             return self.default_action_reasoning
-
-        breakpoint()
-
         raise NotImplementedError
 
     def choose_action(self) -> ActionDecision:
@@ -1314,16 +1328,6 @@ class Orchestrator:
             SystemMessage(content=self.action_choice_context),
             SystemMessage(content=self.action_choice_reasoning),
         ]
-        if self.focused_subtask:
-            breakpoint()
-
-        # breakpoint()
-        # > add event for opening a subtask
-        # > when selecting executor, task success is based on similar tasks that executor dealt with before
-        # > add fake timestamps
-        # > close subtask: adds event that is a summary of the new items in the discussion to maintain state continuity
-        # > refactor enums to not use value (__str__ function)
-
         action_choice = query_model(
             model=precise_model,
             messages=messages,
@@ -1343,6 +1347,11 @@ class Orchestrator:
         """Events that have occurred during the execution of the task."""
         return self.task.event_log
 
+    @property
+    def id_generator(self) -> IdGenerator:
+        """Id generator for the orchestrator."""
+        return self.task.id_generator
+
     def message_task_owner(self, message: str) -> ActionResult:
         """Send message to main task owner. Main task is blocked until there is a reply."""
         return ActionResult(
@@ -1355,12 +1364,14 @@ class Orchestrator:
                         new_status=TaskWorkStatus.BLOCKED,
                     ),
                     task_id=self.task.id,
+                    id_generator=self.id_generator,
                 ),
                 Event(
                     data=Message(
                         sender=self.id, recipient=self.task.owner_id, content=message
                     ),
                     task_id=self.task.id,
+                    id_generator=self.id_generator,
                 ),
             ],
             pause_execution=PauseExecution(True),
@@ -1413,7 +1424,7 @@ class Orchestrator:
         messages = [
             SystemMessage(
                 content=dedent_and_strip(context).format(
-                    base_info=self.base_orchestator_info(),
+                    base_info=self.base_info,
                     msi=MODULAR_SUBTASK_IDENTIFICATION,
                 )
             ),
@@ -1558,6 +1569,7 @@ class Orchestrator:
                 content=message,
             ),
             task_id=subtask.id,
+            id_generator=self.id_generator,
         )
 
     def send_subtask_message(self, message: str, add_event: bool = True) -> None:
@@ -1606,6 +1618,7 @@ class Orchestrator:
                 validation_result=subtask_validation,
             ),
             task_id=self.task.id,
+            id_generator=self.id_generator,
         )
         if not subtask_validation.valid:
             return ActionResult(
@@ -1618,6 +1631,7 @@ class Orchestrator:
             rank_limit=None if self.rank_limit is None else self.rank_limit - 1,
             description=TaskDescription(information=extracted_subtask),
             validator=self.task.validator,
+            id_generator=self.id_generator,
         )
         self.delegator.assign_executor(subtask, self.recent_events_size, self.auto_wait)
         assert subtask.executor is not None, "Task executor assignment failed."
@@ -1644,6 +1658,14 @@ class Orchestrator:
 
     def act(self, decision: ActionDecision) -> ActionResult:
         """Act on a decision."""
+
+        # generate deterministic uuids
+        # ....
+        # refactor enums to not use value (__str__ function)
+        # ....
+        # > make it so that when sending a message or changing status, event is added to both subtask and main task
+        # prompt adjustments > in ActionReasoningNotes.SUBTASK_STATUS_INFO, convert "task" to "subtask" > make ORCHESTRATOR ACTIONS and ACTION CHOICES terms consistent > when opening subtask discussion, add event to both subtask and main task > when pausing subtask discussion, add event to both subtask and main task
+        # > "The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistatn API."
         decision.validate_action(valid_actions=self.default_action_names)
         if decision.action_name == ActionName.MESSAGE_TASK_OWNER.value:
             return self.message_task_owner(decision.action_args["message"])
@@ -1655,6 +1677,10 @@ class Orchestrator:
             raise NotImplementedError
         if decision.action_name == ActionName.WAIT.value:
             raise NotImplementedError
+        # > close subtask: adds event that is a summary of the new items in the discussion to maintain state continuity
+        raise NotImplementedError
+        # > when selecting executor, task success is based on similar tasks that executor dealt with before
+        # > add fake timestamps
 
     def message_from_owner(self, message: str) -> Event:
         """Create a message from the task owner."""
@@ -1665,6 +1691,7 @@ class Orchestrator:
                 content=message,
             ),
             task_id=self.task.id,
+            id_generator=self.id_generator,
         )
 
     def message_to_owner(self, message: str) -> Event:
@@ -1676,6 +1703,7 @@ class Orchestrator:
                 content=message,
             ),
             task_id=self.task.id,
+            id_generator=self.id_generator,
         )
 
     _new_event_count = 0
@@ -1816,6 +1844,12 @@ class Delegator:
     executors_dir: Path
     base_capabilities: Sequence[BaseCapability]
     advisor: Advisor
+    id: DelegatorId = field(init=False)
+    id_generator: IdGenerator
+
+    def __post_init__(self) -> None:
+        """Post init."""
+        self.id = generate_aranea_id(DelegatorId, self.id_generator)
 
     def search_blueprints(
         self,
@@ -1847,9 +1881,10 @@ class Delegator:
         self, task: Task, recent_events_size: int, auto_await: bool
     ) -> Executor:
         """Factory for creating a new executor for a task."""
-        if base_capability := self.map_base_capability(task):
+        # if base_capability := self.map_base_capability(task):
+        if self.map_base_capability(task):
             raise NotImplementedError
-            return create_base_capability(base_capability)
+            # return create_base_capability(base_capability)
 
         # now we know it's not a basic task that a simple bot can handle, so we must create an orchestrator
         blueprint = Blueprint(
@@ -1861,6 +1896,7 @@ class Delegator:
             knowledge="",
             recent_events_size=recent_events_size,
             auto_wait=auto_await,
+            id_generator=self.id_generator,
         )
         return Orchestrator(
             blueprint=blueprint,
@@ -1952,13 +1988,13 @@ class Delegator:
             return automapped_capability
 
         # now we know automapped capability didn't work
-        manual_capability_prompt = "Automated capability mapping failed. Please choose a base capability for this task:"
         raise NotImplementedError
-        manual_capability_choice = get_choice(
-            manual_capability_prompt,
-            allowed_choices=set(range(len(self.all_base_capabilities))),
-            advisor=human,
-        )
+        # manual_capability_prompt = "Automated capability mapping failed. Please choose a base capability for this task:"
+        # manual_capability_choice = get_choice(
+        #     manual_capability_prompt,
+        #     allowed_choices=set(range(len(self.all_base_capabilities))),
+        #     advisor=human,
+        # )
 
         # TODO: basic coding task case: 20 lines or less of base python > coding bot will be equipped with function it wrote
         # TODO: basic search task case: search for basic info about a concept
@@ -1993,6 +2029,8 @@ class Aranea:
     """Number of recent events to display in orchestrators' event logs."""
     auto_wait: bool = True
     """Whether orchestrators will automatically wait for their executors."""
+    id_generator: IdGenerator = field(default_factory=DefaultIdGenerator)
+    """Generator for ids of entities in the system."""
 
     def __post_init__(self) -> None:
         """Post-initialization hook."""
@@ -2015,12 +2053,13 @@ class Aranea:
             self.executors_dir,
             self.base_capabilities,
             advisor=self.base_capability_advisor,
+            id_generator=self.id_generator,
         )
 
     @cached_property
     def id(self) -> RuntimeId:
         """Runtime id of the agent."""
-        return RuntimeId(str(generate_uuid()))
+        return RuntimeId(str(self.id_generator()))
 
     @property
     def name(self) -> str:
@@ -2036,6 +2075,7 @@ class Aranea:
             owner_id=self.id,
             rank_limit=None,
             validator=self.work_validator,
+            id_generator=self.id_generator,
         )
         self.delegator.assign_executor(task, self.recent_events_size, self.auto_wait)
         assert task.executor is not None, "Task executor assignment failed."
@@ -2332,6 +2372,7 @@ async def test_full() -> None:
             files_dir=Path(".data/test/aranea"),
             base_capability_advisor=human_tester,
             work_validator=human_tester,
+            id_generator=DefaultIdGenerator(namespace=UUID("6bcf7dd4-8e29-58f6-bf5f-7566d4108df4"), seed="test"),
         )
         task = "Create an OpenAI assistant agent."
         reply = (result := await aranea.run(task)).content
@@ -2339,6 +2380,7 @@ async def test_full() -> None:
             reply = await result.continue_conversation(human_reply)
 
 
+# d3ad543d-d3b9-51a7-ae49-4d77f8a8a505
 def test() -> None:
     """Run tests."""
     configure_langchain_cache(Path(".cache"))

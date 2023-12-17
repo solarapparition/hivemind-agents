@@ -14,7 +14,7 @@ from langchain.schema import HumanMessage, SystemMessage
 from hivemind.toolkit.models import query_model, super_broad_model
 from hivemind.toolkit.resource_retrieval import scrape
 from hivemind.toolkit.text_extraction import extract_blocks
-from hivemind.toolkit.timestamp import utc_timestamp
+from hivemind.toolkit.id_generation import utc_timestamp
 from hivemind.config import TO_MARKDOWN_API_KEY
 
 
