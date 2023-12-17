@@ -3,7 +3,7 @@
 import shelve
 import os
 import asyncio
-
+from itertools import chain
 from enum import Enum
 from dataclasses import dataclass, asdict, field
 from functools import cached_property
@@ -191,7 +191,18 @@ class TaskStatusChange:
         return f"{self.changing_agent}: I've updated the status of task {self.subtask_id} from {self.old_status.value} to {self.new_status.value}."
 
 
-EventData = Message | SubtaskIdentification | TaskStatusChange
+@dataclass(frozen=True)
+class SubtaskFocus:
+    """Data for changing the focus of a main task owner."""
+
+    owner_id: RuntimeId
+    subtask_id: TaskId
+
+    def __str__(self) -> str:
+        return f"{self.owner_id}: I've changed focus to subtask {self.subtask_id}."
+
+
+EventData = Message | SubtaskIdentification | TaskStatusChange | SubtaskFocus
 
 
 def replace_task_id(text_to_replace: str, task_id: TaskId, replacement: str) -> str:
@@ -399,6 +410,14 @@ class TaskDescription:
         )
 
 
+@dataclass
+class ExecutorReport:
+    """Report from an executor."""
+
+    reply: str
+    events: list[Event] = field(default_factory=list)
+
+
 class Executor(Protocol):
     """An agent responsible for executing a task."""
 
@@ -416,7 +435,7 @@ class Executor(Protocol):
         """Decides whether the executor accepts a task."""
         raise NotImplementedError
 
-    async def execute(self, message: str | None = None) -> str:
+    async def execute(self, message: str | None = None) -> ExecutorReport:
         """Execute the subtask. Adds a message to the task's event log if provided, and adds own message to the event log at the end of execution."""
         raise NotImplementedError
 
@@ -533,23 +552,6 @@ class Task:
     ) -> str:
         """Discussion of a task in the event log."""
         return self.reformat_event_log(self.event_log.messages, pov)
-
-    def resume(self, resuming_agent: RuntimeId, add_event: bool) -> None:
-        """Update the task state for resumption."""
-        if add_event:
-            self.event_log.add(
-                Event(
-                    data=TaskStatusChange(
-                        changing_agent=resuming_agent,
-                        subtask_id=self.id,
-                        old_status=self.work_status,
-                        new_status=TaskWorkStatus.IN_PROGRESS,
-                    ),
-                    task_id=self.id,
-                    id_generator=self.id_generator,
-                )
-            )
-        self.work_status = TaskWorkStatus.IN_PROGRESS
 
 
 @dataclass
@@ -1356,16 +1358,16 @@ class Orchestrator:
         """Send message to main task owner. Main task is blocked until there is a reply."""
         return ActionResult(
             new_events=[
-                Event(
-                    data=TaskStatusChange(
-                        changing_agent=self.id,
-                        subtask_id=self.task.id,
-                        old_status=self.task.work_status,
-                        new_status=TaskWorkStatus.BLOCKED,
-                    ),
-                    task_id=self.task.id,
-                    id_generator=self.id_generator,
-                ),
+                # Event(
+                #     data=TaskStatusChange(
+                #         changing_agent=self.id,
+                #         subtask_id=self.task.id,
+                #         old_status=self.task.work_status,
+                #         new_status=TaskWorkStatus.BLOCKED,
+                #     ),
+                #     task_id=self.task.id,
+                #     id_generator=self.id_generator,
+                # ),
                 Event(
                     data=Message(
                         sender=self.id, recipient=self.task.owner_id, content=message
@@ -1572,22 +1574,39 @@ class Orchestrator:
             id_generator=self.id_generator,
         )
 
-    def send_subtask_message(self, message: str, add_event: bool = True) -> None:
-        """Post a message to the focused subtask."""
-        assert (
-            self.focused_subtask is not None
-        ), "Subtask message can only be sent when a subtask is focused."
-        self.focused_subtask.event_log.add(
-            self.subtask_message(self.focused_subtask, message)
-        )
-        self.focused_subtask.resume(resuming_agent=self.id, add_event=add_event)
-
-    def initiate_subtask(self, subtask: Task) -> None:
+    def start_subtask(
+        self, subtask: Task, message_text: str, initial: bool = False
+    ) -> list[Event]:
         """Initiate a subtask."""
+        assert self.focused_subtask is not None
+        message_event = self.subtask_message(self.focused_subtask, message_text)
+        subtask.event_log.add(message_event)
+        status_change_event = Event(
+            data=TaskStatusChange(
+                changing_agent=self.id,
+                subtask_id=subtask.id,
+                old_status=subtask.work_status,
+                new_status=TaskWorkStatus.IN_PROGRESS,
+            ),
+            task_id=self.task.id,
+            id_generator=self.id_generator,
+        )
+        report_status_change = (
+            not initial and subtask.work_status != TaskWorkStatus.IN_PROGRESS
+        )
+        subtask.work_status = TaskWorkStatus.IN_PROGRESS
+        return [status_change_event] if report_status_change else []
+
+    def focus_subtask(self, subtask: Task) -> Event:
+        """Focus on a subtask."""
         self.focused_subtask = subtask
-        self.send_subtask_message(
-            "Hi, please feel free to ask me any questions about the context of this task—I've only given you a brief description to start with, but I can provide more information if you need it.",
-            add_event=False,
+        return Event(
+            data=SubtaskFocus(
+                owner_id=self.id,
+                subtask_id=subtask.id,
+            ),
+            task_id=self.task.id,
+            id_generator=self.id_generator,
         )
 
     def identify_new_subtask(self) -> ActionResult:
@@ -1636,10 +1655,19 @@ class Orchestrator:
         self.delegator.assign_executor(subtask, self.recent_events_size, self.auto_wait)
         assert subtask.executor is not None, "Task executor assignment failed."
         self.add_subtask(subtask)
-        self.initiate_subtask(subtask)
+        subtask_focus_event = self.focus_subtask(subtask)
+        subtask_initiation_event = self.start_subtask(
+            subtask,
+            message_text="Hi, please feel free to ask me any questions about the context of this task—I've only given you a brief description to start with, but I can provide more information if you need it.",
+            initial=True,
+        )
         return ActionResult(
             pause_execution=PauseExecution(False),
-            new_events=[subtask_identification_event],
+            new_events=[
+                subtask_identification_event,
+                subtask_focus_event,
+                *subtask_initiation_event,
+            ],
         )
 
     @property
@@ -1658,14 +1686,6 @@ class Orchestrator:
 
     def act(self, decision: ActionDecision) -> ActionResult:
         """Act on a decision."""
-
-        # generate deterministic uuids
-        # ....
-        # refactor enums to not use value (__str__ function)
-        # ....
-        # > make it so that when sending a message or changing status, event is added to both subtask and main task
-        # prompt adjustments > in ActionReasoningNotes.SUBTASK_STATUS_INFO, convert "task" to "subtask" > make ORCHESTRATOR ACTIONS and ACTION CHOICES terms consistent > when opening subtask discussion, add event to both subtask and main task > when pausing subtask discussion, add event to both subtask and main task
-        # > "The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistatn API."
         decision.validate_action(valid_actions=self.default_action_names)
         if decision.action_name == ActionName.MESSAGE_TASK_OWNER.value:
             return self.message_task_owner(decision.action_args["message"])
@@ -1677,10 +1697,12 @@ class Orchestrator:
             raise NotImplementedError
         if decision.action_name == ActionName.WAIT.value:
             raise NotImplementedError
+        breakpoint()
+        # > prompt adjustments > in ActionReasoningNotes.SUBTASK_STATUS_INFO, convert "task" to "subtask" > make ORCHESTRATOR ACTIONS and ACTION CHOICES terms consistent > when pausing subtask discussion, add event to both subtask and main task > recent events and subtask discussion no longer overlap, so update state text to reflect that > add fake timestamps (advance automatically by 1 second each time)
         # > close subtask: adds event that is a summary of the new items in the discussion to maintain state continuity
+        # > "The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistatn API."
         raise NotImplementedError
         # > when selecting executor, task success is based on similar tasks that executor dealt with before
-        # > add fake timestamps
 
     def message_from_owner(self, message: str) -> Event:
         """Create a message from the task owner."""
@@ -1711,7 +1733,7 @@ class Orchestrator:
     def update_state_from_new_events(self) -> None:
         """Update the state of the task from new events."""
         raise NotImplementedError(
-            "This is where we update the main task description based on new events (such as info from main task owner."
+            "TODO: This is where we update the main task description based on new events (such as info from main task owner)."
         )
 
     def add_to_event_log(self, events: Sequence[Event]) -> None:
@@ -1722,18 +1744,32 @@ class Orchestrator:
             self.update_state_from_new_events()
             self._new_event_count = 0
 
-    async def execute(self, message: str | None = None) -> str:
+    async def execute(self, message: str | None = None) -> ExecutorReport:
         """Execute the task. Adds a message (if provided) to the task's event log, and adds own message to the event log at the end of execution."""
         if message is not None:
             self.add_to_event_log([self.message_from_owner(message)])
+        old_work_status = self.task.work_status
         while True:
             if self.auto_wait and self.awaitable_subtasks:
-                events = [
+                executor_reports = [
                     asyncio.create_task(subtask.executor.execute())
                     for subtask in self.awaitable_subtasks
                     if subtask.executor is not None
                 ]
-                await asyncio.wait(events, return_when=asyncio.FIRST_COMPLETED)
+                done_reports, _ = await asyncio.wait(
+                    executor_reports, return_when=asyncio.FIRST_COMPLETED
+                )
+                executor_events = list(
+                    chain(
+                        *[
+                            report.result().events
+                            for report in done_reports
+                            if report.result().events
+                        ]
+                    )
+                )
+                executor_events.sort(key=lambda event: event.timestamp)
+                self.add_to_event_log(executor_events)
             action_decision = self.choose_action()
             action_result = self.act(action_decision)
             if action_result.new_events:
@@ -1753,7 +1789,26 @@ class Orchestrator:
             and last_event.data.recipient != self.task.owner_id
         ):
             raise NotImplementedError
-        return last_event.data.content
+        events = (
+            [
+                Event(
+                    data=TaskStatusChange(
+                        changing_agent=self.id,
+                        subtask_id=self.task.id,
+                        old_status=old_work_status,
+                        new_status=self.task.work_status,
+                    ),
+                    task_id=self.task.id,
+                    id_generator=self.id_generator,
+                )
+            ]
+            if self.task.work_status != old_work_status
+            else []
+        )
+        return ExecutorReport(
+            reply=last_event.data.content,
+            events=events,
+        )
 
     @classmethod
     def load(
@@ -2086,11 +2141,10 @@ class Aranea:
             assert (
                 task.executor is not None
             ), "Task executor must exist in order to be executed."
-            task.resume(resuming_agent=self.id, add_event=True)
-            return await task.executor.execute(message)
+            return (await task.executor.execute(message)).reply
 
         return Reply(
-            content=reply_text,
+            content=reply_text.reply,
             continue_func=continue_conversation,
         )
 
@@ -2372,7 +2426,9 @@ async def test_full() -> None:
             files_dir=Path(".data/test/aranea"),
             base_capability_advisor=human_tester,
             work_validator=human_tester,
-            id_generator=DefaultIdGenerator(namespace=UUID("6bcf7dd4-8e29-58f6-bf5f-7566d4108df4"), seed="test"),
+            id_generator=DefaultIdGenerator(
+                namespace=UUID("6bcf7dd4-8e29-58f6-bf5f-7566d4108df4"), seed="test"
+            ),
         )
         task = "Create an OpenAI assistant agent."
         reply = (result := await aranea.run(task)).content
@@ -2380,7 +2436,6 @@ async def test_full() -> None:
             reply = await result.continue_conversation(human_reply)
 
 
-# d3ad543d-d3b9-51a7-ae49-4d77f8a8a505
 def test() -> None:
     """Run tests."""
     configure_langchain_cache(Path(".cache"))
