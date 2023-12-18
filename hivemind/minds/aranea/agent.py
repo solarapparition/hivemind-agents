@@ -1735,9 +1735,10 @@ class Orchestrator:
 
     _new_event_count = 0
 
-    def generate_main_task_update_reasoning(self) -> str:
+    @staticmethod
+    def generate_main_task_update_reasoning(printout: bool = True) -> str:
         """Generate reasoning for updating the main task."""
-        template = f"""
+        context = f"""
         ## MISSION:
         You are the instructor for an AI task orchestration agent. Your purpose is to provide step-by-step guidance for the agent to think through how to update the main task description based on new information in an event log.
 
@@ -1748,45 +1749,56 @@ class Orchestrator:
         - {Concepts.MAIN_TASK.value}: the task that the orchestrator is responsible for executing.
 
         ## {Concepts.ORCHESTRATOR_INFORMATION_SECTIONS.value}:
-        The orchestrator has access to the following information.
-        - {Concepts.MAIN_TASK_DESCRIPTION.value}: a description of what the {Concepts.MAIN_TASK.value} is about, including the goal of the task and any relevant background information.
-        # ....
+        The orchestrator has access to the following information:
         - {Concepts.MAIN_TASK_DEFINITION_OF_DONE.value}: a description of the criteria that must be met for the {Concepts.MAIN_TASK.value} to be considered complete.
+        - {Concepts.MAIN_TASK_DESCRIPTION.value}: a description of what the {Concepts.MAIN_TASK.value} is about, including the goal of the task and any relevant background information. This section provides details that may be too granular for the {Concepts.MAIN_TASK_DEFINITION_OF_DONE.value} section.
         - {Concepts.RECENT_MESSAGES.value}: a list of the most recent messages between the orchestrator and the {Concepts.MAIN_TASK_OWNER.value}.
-        - {Concepts.LAST_READ_MAIN_TASK_OWNER_MESSAGE.value}: the last message sent by the {Concepts.MAIN_TASK_OWNER.value} that has been read by the orchestrator.
-
-        ## REQUEST FOR YOU:
-
-
-
-
-
-        # OVERVIEW = "Provide a step-by-step, robust reasoning process for the orchestrator to sequentially think through the information it has access to so that it has the appropriate mental context for deciding what to do next. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind. Some things to note:"
-        # ....
+        - {Concepts.LAST_READ_MAIN_TASK_OWNER_MESSAGE.value}: the last message in the {Concepts.RECENT_MESSAGES.value} section sent by the {Concepts.MAIN_TASK_OWNER.value} that has been read by the orchestrator. All messages after this message have not been read by the orchestrator yet.
         """
 
-        breakpoint()
-        # ACTION_RESTRICTIONS = "The final action that the orchestrator decides on MUST be one of the ORCHESTRATOR ACTIONS described above. The orchestrator cannot perform any other actions."
-        # FOCUSED_SUBTASK_RESTRICTIONS = f"The orchestrator cannot directly change the {Concepts.FOCUSED_SUBTASK.value}. To focus on a different subtask, it must first use the {ActionName.PAUSE_SUBTASK_DISCUSSION} action first. Overall, the orchestrator should be focused on helping the EXECUTOR of the {Concepts.FOCUSED_SUBTASK.value}, and will need strong reason to change its focus."
-        # INFORMATION_RESTRICTIONS = f"Assume that the orchestrator has access to what's described in {Concepts.ORCHESTRATOR_INFORMATION_SECTIONS.value} above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3."
-        # TERM_REFERENCES = """The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section"); however, only capitalize terms that are capitalized in the information sections—don't use capitalization as emphasis."""
-        # SUBTASK_STATUS_INFO = f"Typically, tasks that are {TaskWorkStatus.COMPLETED.value}, {TaskWorkStatus.CANCELLED.value}, {TaskWorkStatus.IN_PROGRESS.value}, or {TaskWorkStatus.IN_VALIDATION.value} do not need immediate attention unless the orchestrator discovers information that changes the status of the subtask. Tasks that are {TaskWorkStatus.BLOCKED} will need action from the orchestrator to start or resume execution respectively."
-        # STEPS_RESTRICTIONS = "The reasoning process should be written in second person and be around 5-7 steps, though you can add substeps within a step (a, b, c, etc.) if it is complex."
-        # PROCEDURAL_SCRIPTING = "The reasoning steps can refer to the results of previous steps, and it may be effective to build up the orchestrator's mental context step by step, starting from basic information available, similar to writing a procedural script for a program but in natural language instead of code."
+        task = f"""
+        ## REQUEST FOR YOU:
+        Provide a step-by-step, robust reasoning process for the orchestrator to sequentially think through the information it has access to so that it has the appropriate mental context for updating the {Concepts.MAIN_TASK_DESCRIPTION.value} and {Concepts.MAIN_TASK_DEFINITION_OF_DONE.value} sections to reflect the new information in the {Concepts.RECENT_MESSAGES.value} that comes after {Concepts.LAST_READ_MAIN_TASK_OWNER_MESSAGE.value}. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind. Some things to note:
+        - This reasoning process does not make the actual updates to the {Concepts.MAIN_TASK_DESCRIPTION.value} and {Concepts.MAIN_TASK_DEFINITION_OF_DONE.value} sections; it only figures out what updates are needed.
+        - Both the {Concepts.MAIN_TASK_DESCRIPTION} and {Concepts.MAIN_TASK_DEFINITION_OF_DONE} sections may be outdated, hence the need to update them with the latest messages from the {Concepts.MAIN_TASK_OWNER.value}.
+        - {OrchestratorReasoningNotes.INFORMATION_RESTRICTIONS.value}
+        - The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "{Concepts.MAIN_TASK.value}" or "{Concepts.RECENT_MESSAGES.value} section"); however, don't use capitalization as emphasis for any other terms.
+        - {OrchestratorReasoningNotes.STEPS_RESTRICTIONS.value}
+        - {OrchestratorReasoningNotes.PROCEDURAL_SCRIPTING.value}
 
-        breakpoint()
+        {{output_instructions}}
+        """
+        messages = [
+            SystemMessage(content=dedent_and_strip(context)),
+            SystemMessage(
+                content=dedent_and_strip(task).format(
+                    output_instructions=REASONING_OUTPUT_INSTRUCTIONS
+                )
+            ),
+        ]
+        return query_and_extract_reasoning(
+            messages,
+            preamble=f"Generating reasoning for updating the main task...\n{print_messages(messages)}",
+            printout=printout,
+        )
+
 
     def update_main_task(self) -> None:
         """Update the main task from new events."""
-        ideas = """
-        - concept: main task owner: the agent that owns the main task
-        - concept: main task
-        - concept: last main task message
-        - concept: recent messages
-        - concept: main task description
-        - concept: main task definition of done
+        reasoning = f"""
+        1. Review the {Concepts.MAIN_TASK_DESCRIPTION.value} and the MAIN TASK DEFINITION OF DONE to recall the current status and objectives of the MAIN TASK. Note any specific requirements or key details that may be affected by new information.
+        2. Check the LAST READ MAIN TASK OWNER MESSAGE to identify where in the RECENT MESSAGES section you will begin integrating new information. The messages that come after this will hold the updates you need to consider.
+        3. Sequentially read and analyze the messages in the RECENT MESSAGES section that follow after the LAST READ MAIN TASK OWNER MESSAGE. For each message:
+           a. Determine whether the message contains new information or requests that change the nature or the details of the MAIN TASK.
+           b. Evaluate if the new information influences the completion criteria outlined in the MAIN TASK DEFINITION OF DONE.
+           c. Note any information that requires clarification or follow-up from the MAIN TASK OWNER and formulate a message to send if necessary.
+        4. Synthesize the new information from step 3 into a concise summary, highlighting the changes impacting the MAIN TASK. Record how the MAIN TASK description or definition of done may need to be adjusted based on this information.
+        5. Review the synthesized summary and establish a mental update plan by correlating the necessary changes with specific sections of the MAIN TASK DESCRIPTION and MAIN TASK DEFINITION OF DONE.
+           a. For each section, list out the points that will be updated.
+           b. Organize these points to ensure they are logical and do not conflict with each other.
+        6. Before proceeding with actual updates, verify if there is alignment between the MAIN TASK DEFINITION OF DONE, the current MAIN TASK DESCRIPTION, and the new information by comparing them.
+        7. Draft provisional updates to the MAIN TASK DESCRIPTION and MAIN TASK DEFINITION OF DONE internally, ensuring they reflect the new information accurately and maintain coherence with the MAIN TASK objectives.
         """
-        template = self.generate_main_task_update_reasoning()
 
         # update main task from new events
         breakpoint()
@@ -1794,6 +1806,8 @@ class Orchestrator:
         raise NotImplementedError(
             "TODO: This is where we update the main task description based on new events (such as info from main task owner)."
         )
+        # > reasoning generation: term references: make it clear that it's fine to use capitalized concepts (there's an inconsistency right now)
+        # > turn printout into config parameter for aranea
 
     def add_to_event_log(self, events: Sequence[Event]) -> None:
         """Add events to the event log."""
@@ -2207,6 +2221,9 @@ class Aranea:
             continue_func=continue_conversation,
         )
 
+
+Orchestrator.generate_main_task_update_reasoning()
+breakpoint()
 
 # > need to add cancellation reason for cancelled tasks
 # > when subtask extraction fails, update extraction script (perhaps with trajectory of extraction history)
