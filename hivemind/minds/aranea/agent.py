@@ -27,6 +27,7 @@ from typing import (
 )
 
 from langchain.schema import SystemMessage, BaseMessage
+from ruamel.yaml import YAMLError
 from colorama import Fore
 
 from hivemind.config import configure_langchain_cache
@@ -1813,8 +1814,10 @@ class Orchestrator:
         )
         return next(old_messages, None)
 
-    def update_main_task(self) -> None:
-        """Update the main task from new events."""
+    def generate_main_task_description_update(
+        self,
+    ) -> tuple[TaskDescription, str | None]:
+        """Generate an update to the main task description."""
         reasoning = f"""
         1. Review the {Concept.MAIN_TASK_INFORMATION.value} and the {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} to recall the current status and objectives of the {Concept.MAIN_TASK.value}. Note any specific requirements or key details that may be affected by new information.
         2. Check the {Concept.LAST_READ_MAIN_TASK_OWNER_MESSAGE.value} to identify where in the {Concept.TASK_MESSAGES.value} section you will begin integrating new information. The messages that come after this will hold the updates you need to consider.
@@ -1859,35 +1862,82 @@ class Orchestrator:
             last_read_main_task_owner_message=self.last_read_message
             or "No messages read.",
         )
+        task = """
+        ## REQUEST FOR YOU:
+        Use the following reasoning process to determine what must be updated in the {MAIN_TASK_DESCRIPTION} and {MAIN_TASK_DEFINITION_OF_DONE} sections:
+        ```start_of_reasoning_steps
+        {reasoning_steps}
+        ```end_of_reasoning_steps
 
-        # task = f"""
-        # ## REQUEST FOR YOU:
-        # Use the following reasoning process to determine what must be updated in the {Concept.MAIN_TASK_DESCRIPTION.value} and {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} sections:
-        # ```start_of_reasoning_steps
-        # {{reasoning_steps}}
-        # ```end_of_reasoning_steps
+        {reasoning_output_instructions}
 
-        # In your reply, you must include output from all steps of the reasoning process, in this block format:
-        # ```start_of_reasoning_output
-        # 1. {{step_1_output}}
-        # 2. {{step_2_output}}
-        # 3. [... etc.]
-        # ```end_of_reasoning_output
+        After this block, use the information from the reasoning process to rewrite the {MAIN_TASK_DESCRIPTION} and {MAIN_TASK_DEFINITION_OF_DONE} sections to reflect the new information, in this format:
+        ```start_of_main_task_info
+        main_task_information: |-
+          {{updated main task information}}
+        main_task_definition_of_done:
+          - {{requirement 1}}
+          - {{requirement 2}}
+          - [... etc.]
+        needed_followup: |-
+          {{any followup actions you intend, or `NONE`}}
+        ```end_of_main_task_info
+        """
+        task = dedent_and_strip(task).format(
+            MAIN_TASK_DESCRIPTION=Concept.MAIN_TASK_INFORMATION.value,
+            MAIN_TASK_DEFINITION_OF_DONE=Concept.MAIN_TASK_DEFINITION_OF_DONE.value,
+            reasoning_steps=reasoning,
+            reasoning_output_instructions=REASONING_OUTPUT_INSTRUCTIONS,
+        )
+        messages = [
+            SystemMessage(content=context),
+            SystemMessage(content=task),
+        ]
+        result = query_model(
+            model=precise_model,
+            messages=messages,
+            preamble=f"Updating main task description...\n{print_messages(messages)}",
+            color=AGENT_COLOR,
+        )
+        extracted_result = extract_blocks(result, "start_of_main_task_info")
+        if not extracted_result:
+            raise ExtractionError(
+                f"Could not extract main task description from the result:\n{result}"
+            )
+        try:
+            extracted_result = yaml.load(extracted_result[-1])
+        except YAMLError as error:
+            raise ExtractionError(
+                f"Could not extract main task description dictionary from the result:\n{result}"
+            ) from error
+        return (
+            TaskDescription(
+                information=extracted_result["main_task_information"],
+                definition_of_done=extracted_result["main_task_definition_of_done"],
+            ),
+            None
+            if "NONE" in (needed_followup := extracted_result["needed_followup"])
+            else needed_followup,
+        )
 
-        # # > convert this to external variable
+    def update_main_task_description(self) -> None:
+        """Update the main task from new events."""
 
-        # After this block, rewrite the {Concept.MAIN_TASK_DESCRIPTION.value} and {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} sections to reflect the new information, in the same format as the original sections:
-        # ```start_of_main_task_info
-        # {}
-        # ```end_of_main_task_info
-        # """
+        (
+            updated_task_description,
+            needed_followup,
+        ) = self.generate_main_task_description_update()
 
-        # update main task from new events
+        # > create events from this
+        # > account for when needed_followup is NONE
         breakpoint()
-
         raise NotImplementedError(
             "TODO: This is where we update the main task description based on new events (such as info from main task owner)."
         )
+        # > update default state_update_frequency to be more
+        # > when mutating agent, either update knowledge, or tweak a single parameter
+        # > add ability to output followup actions when performing actions
+        # > separate out reasoning generation into its own class
         # > add cost as rating factor
         # > temperature parameter
         # > novelty parameter: likelihood of choosing unproven subagent
@@ -1902,7 +1952,7 @@ class Orchestrator:
         self.task.event_log.add(*events)
         self._new_event_count += len(events)
         if self._new_event_count >= self.state_update_frequency:
-            self.update_main_task()
+            self.update_main_task_description()
             self._new_event_count = 0
 
     async def execute(self, message: str | None = None) -> ExecutorReport:
