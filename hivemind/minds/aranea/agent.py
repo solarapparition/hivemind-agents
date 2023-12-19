@@ -53,7 +53,7 @@ VERBOSE = True
 NONE = "None"
 
 
-class Concepts(Enum):
+class Concept(Enum):
     """Concepts for Aranea agents."""
 
     MAIN_TASK_OWNER = "MAIN TASK OWNER"
@@ -62,11 +62,13 @@ class Concepts(Enum):
     EXECUTOR = "EXECUTOR"
     RECENT_EVENTS_LOG = "RECENT EVENTS LOG"
     ORCHESTRATOR_INFORMATION_SECTIONS = "ORCHESTRATOR INFORMATION SECTIONS"
+    SUBTASK = "SUBTASK"
     FOCUSED_SUBTASK = "FOCUSED SUBTASK"
     FOCUSED_SUBTASK_DISCUSSION_LOG = "FOCUSED SUBTASK DISCUSSION LOG"
     MAIN_TASK_DESCRIPTION = "MAIN TASK DESCRIPTION"
+    MAIN_TASK_INFORMATION = "MAIN TASK INFORMATION"
     MAIN_TASK_DEFINITION_OF_DONE = "MAIN TASK DEFINITION OF DONE"
-    RECENT_MESSAGES = "RECENT MESSAGES"
+    TASK_MESSAGES = "TASK MESSAGES"
     LAST_READ_MAIN_TASK_OWNER_MESSAGE = "LAST READ MAIN TASK OWNER MESSAGE"
 
 
@@ -465,6 +467,16 @@ class Task:
         """Post init."""
         self.id = generate_aranea_id(TaskId, self.id_generator)
 
+    @property
+    def definition_of_done(self) -> str | None:
+        """Definition of done for the task."""
+        return self.description.definition_of_done
+
+    @property
+    def information(self) -> str:
+        """Information on the task."""
+        return self.description.information
+
     @cached_property
     def event_log(self) -> EventLog:
         """Event log for the task."""
@@ -474,6 +486,11 @@ class Task:
     def subtasks(self) -> TaskList:
         """Subtasks of the task."""
         return TaskList()
+
+    @property
+    def messages(self) -> EventLog:
+        """Messages for the task."""
+        return self.event_log.messages
 
     @property
     def as_main_task_printout(self) -> str:
@@ -531,16 +548,16 @@ class Task:
     def reformat_event_log(
         self,
         event_log: EventLog,
-        pov: Literal[Concepts.EXECUTOR, Concepts.MAIN_TASK_OWNER],
+        pov: Literal[Concept.EXECUTOR, Concept.MAIN_TASK_OWNER],
     ) -> str:
         """Format an event log."""
         assert self.executor_id is not None
-        if pov == Concepts.EXECUTOR:
+        if pov == Concept.EXECUTOR:
             return event_log.to_str_with_pov(
                 pov_id=self.executor_id,
                 other_id=self.owner_id,
-                other_name=Concepts.MAIN_TASK_OWNER.value,
-                task_id_replacement=Concepts.MAIN_TASK.value,
+                other_name=Concept.MAIN_TASK_OWNER.value,
+                task_id_replacement=Concept.MAIN_TASK.value,
             )
         assert (
             self.name is not None
@@ -548,12 +565,12 @@ class Task:
         return event_log.to_str_with_pov(
             pov_id=self.owner_id,
             other_id=self.executor_id,
-            other_name=Concepts.EXECUTOR.value,
+            other_name=Concept.EXECUTOR.value,
             task_id_replacement=self.name,
         )
 
     def discussion(
-        self, pov: Literal[Concepts.EXECUTOR, Concepts.MAIN_TASK_OWNER]
+        self, pov: Literal[Concept.EXECUTOR, Concept.MAIN_TASK_OWNER]
     ) -> str:
         """Discussion of a task in the event log."""
         return self.reformat_event_log(self.event_log.messages, pov)
@@ -609,7 +626,7 @@ class ActionName(Enum):
 
 
 ORCHESTRATOR_CONCEPTS = f"""
-- {Concepts.ORCHESTRATOR.value}: the agent that is responsible for managing the execution of a main task and managing the statuses of its subtasks, while communicating with the task's owner to gather required information for the task. The orchestrator must communicate with both the task owner and subtask executors to complete the main task as efficiently as possible.
+- {Concept.ORCHESTRATOR.value}: the agent that is responsible for managing the execution of a main task and managing the statuses of its subtasks, while communicating with the task's owner to gather required information for the task. The orchestrator must communicate with both the task owner and subtask executors to complete the main task as efficiently as possible.
 - MAIN TASK: the main task that the orchestrator is responsible for managing, which it does by identifying subtasks and providing support for specialized executor agents for the subtasks.
 - SUBTASK: a task that must be executed in order to complete the main task. The orchestrator does NOT execute subtasks itself; instead, it facilitates the resolution of subtasks by making high-level decisions regarding each subtask in the context of the overall task and providing support for the subtask executors.
 - SUBTASK STATUS: the status of subtasks that have already been identified. The status of a subtask can be one of the following:
@@ -619,7 +636,7 @@ ORCHESTRATOR_CONCEPTS = f"""
   - {TaskWorkStatus.COMPLETED.value}: the subtask has been validated as complete by a validator. Completed subtasks provide a record of overall successful progress for the main task.
   - {TaskWorkStatus.CANCELLED.value}: the subtask has been cancelled for various reason and will not be done.
 - SUBTASK EXECUTOR: an agent that is responsible for executing a subtask. Subtask executors specialize in executing certain types of tasks; whenever a subtask is identified, an executor is automatically assigned to it without any action required from the orchestrator.
-- {Concepts.MAIN_TASK_OWNER.value}: the one who requested the main task to be done. The orchestrator must communicate with the task owner to gather background information required to complete the main task.
+- {Concept.MAIN_TASK_OWNER.value}: the one who requested the main task to be done. The orchestrator must communicate with the task owner to gather background information required to complete the main task.
 """.strip()
 
 
@@ -722,8 +739,8 @@ class OrchestratorReasoningNotes(Enum):
 
     OVERVIEW = "Provide a step-by-step, robust reasoning process for the orchestrator to sequentially think through the information it has access to so that it has the appropriate mental context for deciding what to do next. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind. Some things to note:"
     ACTION_RESTRICTIONS = "The final action that the orchestrator decides on MUST be one of the ORCHESTRATOR ACTIONS described above. The orchestrator cannot perform any other actions."
-    FOCUSED_SUBTASK_RESTRICTIONS = f"The orchestrator cannot directly change the {Concepts.FOCUSED_SUBTASK.value}. To focus on a different subtask, it must first use the {ActionName.PAUSE_SUBTASK_DISCUSSION} action first. Overall, the orchestrator should be focused on helping the EXECUTOR of the {Concepts.FOCUSED_SUBTASK.value}, and will need strong reason to change its focus."
-    INFORMATION_RESTRICTIONS = f"Assume that the orchestrator has access to what's described in {Concepts.ORCHESTRATOR_INFORMATION_SECTIONS.value} above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3."
+    FOCUSED_SUBTASK_RESTRICTIONS = f"The orchestrator cannot directly change the {Concept.FOCUSED_SUBTASK.value}. To focus on a different subtask, it must first use the {ActionName.PAUSE_SUBTASK_DISCUSSION} action first. Overall, the orchestrator should be focused on helping the EXECUTOR of the {Concept.FOCUSED_SUBTASK.value}, and will need strong reason to change its focus."
+    INFORMATION_RESTRICTIONS = f"Assume that the orchestrator has access to what's described in {Concept.ORCHESTRATOR_INFORMATION_SECTIONS.value} above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3."
     TERM_REFERENCES = """The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section"); however, only capitalize terms that are capitalized in the information sections—don't use capitalization as emphasis."""
     SUBTASK_STATUS_INFO = f"Typically, tasks that are {TaskWorkStatus.COMPLETED.value}, {TaskWorkStatus.CANCELLED.value}, {TaskWorkStatus.IN_PROGRESS.value}, or {TaskWorkStatus.IN_VALIDATION.value} do not need immediate attention unless the orchestrator discovers information that changes the status of the subtask. Tasks that are {TaskWorkStatus.BLOCKED} will need action from the orchestrator to start or resume execution respectively."
     STEPS_RESTRICTIONS = "The reasoning process should be written in second person and be around 5-7 steps, though you can add substeps within a step (a, b, c, etc.) if it is complex."
@@ -745,11 +762,11 @@ class OrchestratorInformationSection(Enum):
     """Information sections available to orchestrators."""
 
     KNOWLEDGE = "KNOWLEDGE: background knowledge relating to the orchestrator's area of specialization. The information may or may not be relevant to the specific main task, but is provided as support for the orchestrator's decisionmaking."
-    MAIN_TASK_DESCRIPTION = f"MAIN TASK DESCRIPTION: a description of information about the main task that the orchestrator has learned so far from the {Concepts.MAIN_TASK_OWNER.value}. This may NOT be a complete description of the main task, so the orchestrator must always take into account if there is enough information for performing its actions. Additional information may also be in the {Concepts.RECENT_EVENTS_LOG.value}, as messages from the main task owner."
+    MAIN_TASK_DESCRIPTION = f"MAIN TASK DESCRIPTION: a description of information about the main task that the orchestrator has learned so far from the {Concept.MAIN_TASK_OWNER.value}. This may NOT be a complete description of the main task, so the orchestrator must always take into account if there is enough information for performing its actions. Additional information may also be in the {Concept.RECENT_EVENTS_LOG.value}, as messages from the main task owner."
     SUBTASKS = "SUBTASKS: a list of all subtasks that have been identified by the orchestrator so far; for each one, there is a high-level description of what must be done, as well as the subtask's status. This is not an exhaustive list of all required subtasks for the main task; there may be additional subtasks that are required. This list is automatically maintained and updated by a background process."
-    RECENT_EVENTS_LOG = f"{Concepts.RECENT_EVENTS_LOG.value}: a log of recent events that have occurred during the execution of the task. This can include status updates for subtasks, messages from the main task owner, and the orchestrator's own previous thoughts/decisions."
-    FOCUSED_SUBTASK = f"{Concepts.FOCUSED_SUBTASK.value}: the subtask that the orchestrator is currently focused on. This is the subtask that the orchestrator is currently thinking about and making decisions for. The orchestrator can only focus on one subtask at a time, and cannot perform actions on subtasks that it is not currently focused on."
-    FOCUSED_SUBTASK_FULL_DISCUSSION_LOG = f"{Concepts.FOCUSED_SUBTASK_DISCUSSION_LOG.value}: a log of the full discussion for the focused subtask between the orchestrator and the subtask executor. The most recent messages are also in the {Concepts.RECENT_EVENTS_LOG.value}, but this log contains the full discussion history."
+    RECENT_EVENTS_LOG = f"{Concept.RECENT_EVENTS_LOG.value}: a log of recent events that have occurred during the execution of the task. This can include status updates for subtasks, messages from the main task owner, and the orchestrator's own previous thoughts/decisions."
+    FOCUSED_SUBTASK = f"{Concept.FOCUSED_SUBTASK.value}: the subtask that the orchestrator is currently focused on. This is the subtask that the orchestrator is currently thinking about and making decisions for. The orchestrator can only focus on one subtask at a time, and cannot perform actions on subtasks that it is not currently focused on."
+    FOCUSED_SUBTASK_FULL_DISCUSSION_LOG = f"{Concept.FOCUSED_SUBTASK_DISCUSSION_LOG.value}: a log of the full discussion for the focused subtask between the orchestrator and the subtask executor. The most recent messages are also in the {Concept.RECENT_EVENTS_LOG.value}, but this log contains the full discussion history."
 
 
 @dataclass
@@ -986,7 +1003,7 @@ class Orchestrator:
         """
         return dedent_and_strip(template).format(
             event_log=self.task.reformat_event_log(
-                self.recent_events, pov=Concepts.EXECUTOR
+                self.recent_events, pov=Concept.EXECUTOR
             )
         )
 
@@ -1098,7 +1115,7 @@ class Orchestrator:
         ## CONCEPTS:
         {{orchestrator_concepts}}
 
-        ## {Concepts.ORCHESTRATOR_INFORMATION_SECTIONS.value}:
+        ## {Concept.ORCHESTRATOR_INFORMATION_SECTIONS.value}:
         By default, the orchestrator has access to the following information. Note that all information here is read-only; while identifying new subtasks, the orchestrator cannot modify any of the information here.
         {{orchestrator_information_sections}}
         """
@@ -1204,7 +1221,7 @@ class Orchestrator:
         return dedent_and_strip(template).format(
             subtask_information=self.focused_subtask.as_subtask_printout,
             subtask_discussion=self.focused_subtask.reformat_event_log(
-                self.focused_subtask.event_log.messages, pov=Concepts.MAIN_TASK_OWNER
+                self.focused_subtask.event_log.messages, pov=Concept.MAIN_TASK_OWNER
             ),
         )
 
@@ -1350,7 +1367,7 @@ class Orchestrator:
         return ActionDecision.from_yaml_str(extracted_result[0])
 
     @property
-    def events(self) -> EventLog:
+    def event_log(self) -> EventLog:
         """Events that have occurred during the execution of the task."""
         return self.task.event_log
 
@@ -1414,7 +1431,7 @@ class Orchestrator:
         request = f"""
         ## REQUEST FOR YOU:
         Provide a step-by-step, robust reasoning process for the orchestrator to a) sequentially process the information in the information sections it has access to so that it can identify a new subtask that is not yet identified, and b) understand what MSI is and follow its principles. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind before they perform subtask identification. Some things to note:
-        - Assume that the orchestrator has access to what's described in {Concepts.ORCHESTRATOR_INFORMATION_SECTIONS.value} above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3.
+        - Assume that the orchestrator has access to what's described in {Concept.ORCHESTRATOR_INFORMATION_SECTIONS.value} above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3.
         - The orchestrator requires precise references to information in its information sections, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section").
         - In its current state, the orchestrator is not able to perform any other actions besides subtask identification and the reasoning preceeding it.
         - The reasoning process should be written in second person and be around 5-7 steps, though you can add substeps (a, b, c, etc.) within a step if it is complex.
@@ -1744,25 +1761,25 @@ class Orchestrator:
 
         ## CONCEPTS:
         These are the concepts you should be familiar with:
-        - {Concepts.ORCHESTRATOR.value}: the agent that is responsible for managing the execution of a main task while communicating with the {Concepts.MAIN_TASK_OWNER.value} to gather required information for the task.
-        - {Concepts.MAIN_TASK_OWNER.value}: the agent that owns the main task and is responsible for providing information to the orchestrator to help it execute the main task.
-        - {Concepts.MAIN_TASK.value}: the task that the orchestrator is responsible for executing.
+        - {Concept.ORCHESTRATOR.value}: the agent that is responsible for managing the execution of a main task while communicating with the {Concept.MAIN_TASK_OWNER.value} to gather required information for the task.
+        - {Concept.MAIN_TASK_OWNER.value}: the agent that owns the main task and is responsible for providing information to the orchestrator to help it execute the main task.
+        - {Concept.MAIN_TASK.value}: the task that the orchestrator is responsible for executing.
 
-        ## {Concepts.ORCHESTRATOR_INFORMATION_SECTIONS.value}:
+        ## {Concept.ORCHESTRATOR_INFORMATION_SECTIONS.value}:
         The orchestrator has access to the following information:
-        - {Concepts.MAIN_TASK_DEFINITION_OF_DONE.value}: a description of the criteria that must be met for the {Concepts.MAIN_TASK.value} to be considered complete.
-        - {Concepts.MAIN_TASK_DESCRIPTION.value}: a description of what the {Concepts.MAIN_TASK.value} is about, including the goal of the task and any relevant background information. This section provides details that may be too granular for the {Concepts.MAIN_TASK_DEFINITION_OF_DONE.value} section.
-        - {Concepts.RECENT_MESSAGES.value}: a list of the most recent messages between the orchestrator and the {Concepts.MAIN_TASK_OWNER.value}.
-        - {Concepts.LAST_READ_MAIN_TASK_OWNER_MESSAGE.value}: the last message in the {Concepts.RECENT_MESSAGES.value} section sent by the {Concepts.MAIN_TASK_OWNER.value} that has been read by the orchestrator. All messages after this message have not been read by the orchestrator yet.
+        - {Concept.MAIN_TASK_DEFINITION_OF_DONE.value}: a description of the criteria that must be met for the {Concept.MAIN_TASK.value} to be considered complete.
+        - {Concept.MAIN_TASK_INFORMATION.value}: information on what the {Concept.MAIN_TASK.value} is about, including the goal of the task and any relevant background information. This section provides details that may be too granular for the {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} section.
+        - {Concept.TASK_MESSAGES.value}: a transcript of the messages between the orchestrator and the {Concept.MAIN_TASK_OWNER.value}.
+        - {Concept.LAST_READ_MAIN_TASK_OWNER_MESSAGE.value}: the last message in the {Concept.TASK_MESSAGES.value} section sent by the {Concept.MAIN_TASK_OWNER.value} that has been read by the orchestrator. All messages after this message have not been read by the orchestrator yet.
         """
 
         task = f"""
         ## REQUEST FOR YOU:
-        Provide a step-by-step, robust reasoning process for the orchestrator to sequentially think through the information it has access to so that it has the appropriate mental context for updating the {Concepts.MAIN_TASK_DESCRIPTION.value} and {Concepts.MAIN_TASK_DEFINITION_OF_DONE.value} sections to reflect the new information in the {Concepts.RECENT_MESSAGES.value} that comes after {Concepts.LAST_READ_MAIN_TASK_OWNER_MESSAGE.value}. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind. Some things to note:
-        - This reasoning process does not make the actual updates to the {Concepts.MAIN_TASK_DESCRIPTION.value} and {Concepts.MAIN_TASK_DEFINITION_OF_DONE.value} sections; it only figures out what updates are needed.
-        - Both the {Concepts.MAIN_TASK_DESCRIPTION} and {Concepts.MAIN_TASK_DEFINITION_OF_DONE} sections may be outdated, hence the need to update them with the latest messages from the {Concepts.MAIN_TASK_OWNER.value}.
+        Provide a step-by-step, robust reasoning process for the orchestrator to sequentially think through the information it has access to so that it has the appropriate mental context for updating the {Concept.MAIN_TASK_INFORMATION.value} and {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} sections to reflect the new information in the {Concept.TASK_MESSAGES.value} that comes after {Concept.LAST_READ_MAIN_TASK_OWNER_MESSAGE.value}. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind. Some things to note:
+        - This reasoning process does not make the actual updates to the {Concept.MAIN_TASK_INFORMATION.value} and {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} sections; it only figures out what updates are needed.
+        - Both the {Concept.MAIN_TASK_INFORMATION} and {Concept.MAIN_TASK_DEFINITION_OF_DONE} sections may be outdated, hence the need to update them with the latest messages from the {Concept.MAIN_TASK_OWNER.value}.
         - {OrchestratorReasoningNotes.INFORMATION_RESTRICTIONS.value}
-        - The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "{Concepts.MAIN_TASK.value}" or "{Concepts.RECENT_MESSAGES.value} section"); however, don't use capitalization as emphasis for any other terms.
+        - The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "{Concept.MAIN_TASK.value}" or "{Concept.TASK_MESSAGES.value} section"); however, don't use capitalization as emphasis for any other terms.
         - {OrchestratorReasoningNotes.STEPS_RESTRICTIONS.value}
         - {OrchestratorReasoningNotes.PROCEDURAL_SCRIPTING.value}
 
@@ -1782,23 +1799,88 @@ class Orchestrator:
             printout=printout,
         )
 
+    @property
+    def first_new_event(self) -> Event:
+        """First new event since the last update of the main task."""
+        return self.event_log.events[-(self._new_event_count)]
+
+    @property
+    def last_read_message(self) -> Event | None:
+        """Last message read by the orchestrator."""
+        old_events = reversed(self.event_log.events[: -(self._new_event_count)])
+        old_messages = (
+            event for event in old_events if isinstance(event.data, Message)
+        )
+        return next(old_messages, None)
 
     def update_main_task(self) -> None:
         """Update the main task from new events."""
         reasoning = f"""
-        1. Review the {Concepts.MAIN_TASK_DESCRIPTION.value} and the MAIN TASK DEFINITION OF DONE to recall the current status and objectives of the MAIN TASK. Note any specific requirements or key details that may be affected by new information.
-        2. Check the LAST READ MAIN TASK OWNER MESSAGE to identify where in the RECENT MESSAGES section you will begin integrating new information. The messages that come after this will hold the updates you need to consider.
-        3. Sequentially read and analyze the messages in the RECENT MESSAGES section that follow after the LAST READ MAIN TASK OWNER MESSAGE. For each message:
-           a. Determine whether the message contains new information or requests that change the nature or the details of the MAIN TASK.
-           b. Evaluate if the new information influences the completion criteria outlined in the MAIN TASK DEFINITION OF DONE.
-           c. Note any information that requires clarification or follow-up from the MAIN TASK OWNER and formulate a message to send if necessary.
-        4. Synthesize the new information from step 3 into a concise summary, highlighting the changes impacting the MAIN TASK. Record how the MAIN TASK description or definition of done may need to be adjusted based on this information.
-        5. Review the synthesized summary and establish a mental update plan by correlating the necessary changes with specific sections of the MAIN TASK DESCRIPTION and MAIN TASK DEFINITION OF DONE.
+        1. Review the {Concept.MAIN_TASK_INFORMATION.value} and the {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} to recall the current status and objectives of the {Concept.MAIN_TASK.value}. Note any specific requirements or key details that may be affected by new information.
+        2. Check the {Concept.LAST_READ_MAIN_TASK_OWNER_MESSAGE.value} to identify where in the {Concept.TASK_MESSAGES.value} section you will begin integrating new information. The messages that come after this will hold the updates you need to consider.
+        3. Sequentially read and analyze the messages in the {Concept.TASK_MESSAGES.value} section that follow after the {Concept.LAST_READ_MAIN_TASK_OWNER_MESSAGE.value}. For each message:
+           a. Determine whether the message contains new information or requests that change the nature or the details of the {Concept.MAIN_TASK.value}.
+           b. Evaluate if the new information influences the completion criteria outlined in the {Concept.MAIN_TASK_DEFINITION_OF_DONE.value}.
+           c. Note any information that requires clarification or follow-up from the {Concept.MAIN_TASK_OWNER.value} and formulate a message to send if necessary.
+        4. Synthesize the new information from step 3 into a concise summary, highlighting the changes impacting the {Concept.MAIN_TASK.value}. Record how the {Concept.MAIN_TASK_INFORMATION.value} or {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} may need to be adjusted based on this information.
+        5. Review the synthesized summary and establish a mental update plan by correlating the necessary changes with either the {Concept.MAIN_TASK_INFORMATION.value} or {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} sections.
            a. For each section, list out the points that will be updated.
            b. Organize these points to ensure they are logical and do not conflict with each other.
-        6. Before proceeding with actual updates, verify if there is alignment between the MAIN TASK DEFINITION OF DONE, the current MAIN TASK DESCRIPTION, and the new information by comparing them.
-        7. Draft provisional updates to the MAIN TASK DESCRIPTION and MAIN TASK DEFINITION OF DONE internally, ensuring they reflect the new information accurately and maintain coherence with the MAIN TASK objectives.
         """
+        reasoning = dedent_and_strip(reasoning)
+
+        # You are a task specification agent that specializes in understanding the context for a {Concepts.MAIN_TASK.value} and updating its information sections based on new information.
+        context = f"""
+        ## MISSION:
+        You are an advanced task orchestrator that specializes in managing the execution of a {Concept.MAIN_TASK.value} and delegating its {Concept.SUBTASK.value} to an {Concept.EXECUTOR.value} that can execute those tasks, while communicating with the {Concept.MAIN_TASK_OWNER.value} to gather required information for the {Concept.MAIN_TASK.value}.
+
+        ### MODE:
+        Currently you are NOT communicating with the {Concept.MAIN_TASK_OWNER.value}, but reviewing recent communications with them to update the {Concept.MAIN_TASK_INFORMATION.value} and {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} sections based on new information.
+
+        ## {Concept.MAIN_TASK_INFORMATION.value}:
+        {{main_task_information}}
+
+        ## {Concept.MAIN_TASK_DEFINITION_OF_DONE.value}:
+        {{main_task_dod}}
+
+        ## {Concept.TASK_MESSAGES.value}
+        Here are the messages with the {Concept.MAIN_TASK_OWNER.value}:
+        ```start_of_task_messages
+        {{recent_messages}}
+        ```end_of_task_messages
+        {Concept.LAST_READ_MAIN_TASK_OWNER_MESSAGE.value}: {{last_read_main_task_owner_message}}
+        """
+        context = dedent_and_strip(context).format(
+            main_task_information=self.task.information,
+            main_task_dod=self.task.definition_of_done,
+            recent_messages=self.task.reformat_event_log(
+                self.task.messages, pov=Concept.EXECUTOR
+            ),
+            last_read_main_task_owner_message=self.last_read_message
+            or "No messages read.",
+        )
+
+        # task = f"""
+        # ## REQUEST FOR YOU:
+        # Use the following reasoning process to determine what must be updated in the {Concept.MAIN_TASK_DESCRIPTION.value} and {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} sections:
+        # ```start_of_reasoning_steps
+        # {{reasoning_steps}}
+        # ```end_of_reasoning_steps
+
+        # In your reply, you must include output from all steps of the reasoning process, in this block format:
+        # ```start_of_reasoning_output
+        # 1. {{step_1_output}}
+        # 2. {{step_2_output}}
+        # 3. [... etc.]
+        # ```end_of_reasoning_output
+
+        # # > convert this to external variable
+
+        # After this block, rewrite the {Concept.MAIN_TASK_DESCRIPTION.value} and {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} sections to reflect the new information, in the same format as the original sections:
+        # ```start_of_main_task_info
+        # {}
+        # ```end_of_main_task_info
+        # """
 
         # update main task from new events
         breakpoint()
@@ -1806,6 +1888,12 @@ class Orchestrator:
         raise NotImplementedError(
             "TODO: This is where we update the main task description based on new events (such as info from main task owner)."
         )
+        # > add cost as rating factor
+        # > temperature parameter
+        # > novelty parameter: likelihood of choosing unproven subagent
+        # > when mutating agent, use component optimization of other best agents (that have actual trajectories)
+        # > new mutation has a provisional rating based on the rating of the agent it was mutated from; but doesn't appear in optimization list until it has a trajectory
+        # > model parameter: explain that cheaper model costs less but may reduce accuracy
         # > reasoning generation: term references: make it clear that it's fine to use capitalized concepts (there's an inconsistency right now)
         # > turn printout into config parameter for aranea
 
@@ -2156,7 +2244,7 @@ class Aranea:
     recent_events_size: int = 10
     """Number of recent events to display in orchestrators' event logs."""
     auto_wait: bool = True
-    """Whether orchestrators will automatically wait for their executors."""
+    """Whether orchestrators will automatically wait for their executors. If disabled, orchestrators may perform other actions while an executor works on a task."""
     id_generator: IdGenerator = field(default_factory=DefaultIdGenerator)
     """Generator for ids of entities in the system."""
 
@@ -2221,9 +2309,6 @@ class Aranea:
             continue_func=continue_conversation,
         )
 
-
-Orchestrator.generate_main_task_update_reasoning()
-breakpoint()
 
 # > need to add cancellation reason for cancelled tasks
 # > when subtask extraction fails, update extraction script (perhaps with trajectory of extraction history)
