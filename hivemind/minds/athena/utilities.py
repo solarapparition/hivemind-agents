@@ -3,7 +3,7 @@
 from pathlib import Path
 import pickle
 from typing import Mapping, Any
-from hivemind.toolkit.yaml_tools import save_yaml, yaml
+from hivemind.toolkit.yaml_tools import save_yaml, default_yaml
 
 
 def save_progress(
@@ -22,5 +22,5 @@ def save_progress(
 def load_progress(progress_dir: Path) -> dict[str, Any]:
     """Load progress from disk."""
     location = progress_dir / "progress.yaml"
-    progress = yaml.load(location) or {} if location.exists() else {}
+    progress = default_yaml.load(location) or {} if location.exists() else {}
     return progress

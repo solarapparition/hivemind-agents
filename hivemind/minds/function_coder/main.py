@@ -13,7 +13,7 @@ from langchain.schema import SystemMessage, HumanMessage, BaseMessage
 from langchain.cache import SQLiteCache
 from hivemind.toolkit.text_extraction import extract_block, extract_blocks
 from hivemind.toolkit.text_formatting import dedent_and_strip
-from hivemind.toolkit.yaml_tools import yaml, dump_yaml_str
+from hivemind.toolkit.yaml_tools import default_yaml, dump_yaml_str
 from hivemind.toolkit.models import (
     query_model,
     precise_model,
@@ -79,13 +79,13 @@ class AICodingAgent:
     def save(self) -> None:
         """Save the agent to disk."""
         os.makedirs(self.data_dir, exist_ok=True)
-        yaml.dump(self.data, self.data_dir / "agent.yml")
-        yaml.dump(self.state, self.data_dir / "state.yml")
+        default_yaml.dump(self.data, self.data_dir / "agent.yml")
+        default_yaml.dump(self.state, self.data_dir / "state.yml")
 
     @classmethod
     def from_data_dir(cls, data_dir: Path, helper_lookup_dir: Path) -> Self:
         """Create a codebase agent from a data directory."""
-        data = yaml.load(data_dir / "agent.yml")
+        data = default_yaml.load(data_dir / "agent.yml")
         recorded_helpers: list[str] = data["helpers"]
         existing_helpers = [
             helper_name
@@ -93,7 +93,7 @@ class AICodingAgent:
             if (helper_lookup_dir / helper_name).exists()
         ]
         data["helpers"] = existing_helpers
-        state = yaml.load(data_dir / "state.yml")
+        state = default_yaml.load(data_dir / "state.yml")
         return cls(
             data_dir=data_dir, data=data, state=state, helpers_dir=helper_lookup_dir
         )
@@ -487,7 +487,7 @@ class FunctionAgent(AICodingAgent):
             )
         updated_code = updated_code_blocks[-1]
         new_or_updated_helpers = extract_block(result, "yaml") or "[]"
-        new_or_updated_helpers = yaml.load(new_or_updated_helpers)
+        new_or_updated_helpers = default_yaml.load(new_or_updated_helpers)
         new_helper_agents = [
             FunctionAgent.from_data(
                 data_dir=self.helpers_dir / helper_specs["name"],
@@ -539,7 +539,7 @@ class FunctionAgent(AICodingAgent):
             new_helper_agent.function_name for new_helper_agent in new_helper_agents
         ]
         updated_specs = extract_blocks(result, "yaml")[-2]
-        updated_specs = yaml.load(updated_specs)
+        updated_specs = default_yaml.load(updated_specs)
         # breakpoint()
         self.set_function_info(updated_specs, updated_code, new_helper_names)
 
@@ -848,7 +848,7 @@ def run_coder(
     if choice == 2:
         code, raw_helper_specs = function_agent.generate_code()
         raw_helper_specs = raw_helper_specs or "[]"
-        new_helper_specs: list[dict[str, str]] | str = yaml.load(raw_helper_specs)
+        new_helper_specs: list[dict[str, str]] | str = default_yaml.load(raw_helper_specs)
         if isinstance(new_helper_specs, str):
             new_helper_specs = []
         new_helper_agents = [

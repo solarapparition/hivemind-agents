@@ -11,20 +11,22 @@ yaml_safe.default_flow_style = False
 yaml_safe.default_style = "|"  # type: ignore
 yaml_safe.allow_unicode = True
 
-yaml = YAML()
-yaml.default_flow_style = False
-yaml.default_style = "|"  # type: ignore
-yaml.allow_unicode = True
+default_yaml = YAML()
+default_yaml.default_flow_style = False
+default_yaml.default_style = "|"  # type: ignore
+default_yaml.allow_unicode = True
 
 
 def save_yaml(data: Mapping[str, Any], location: Path) -> None:
     """Save YAML to a file, making sure the directory exists."""
     if not location.exists():
         os.makedirs(location.parent, exist_ok=True)
-    yaml.dump(data, location)
+    default_yaml.dump(data, location)
 
 
-def dump_yaml_str(data: Mapping[str, Any] | list[Any]) -> str:
+def dump_yaml_str(
+    data: Mapping[str, Any] | list[Any], yaml: YAML = default_yaml
+) -> str:
     """Dump yaml as a string."""
     yaml.dump(data, stream := StringIO())
     return stream.getvalue().strip()

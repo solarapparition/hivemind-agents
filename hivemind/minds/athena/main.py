@@ -24,7 +24,7 @@ from hivemind.toolkit.models import (
 )
 from hivemind.toolkit.text_extraction import extract_block, extract_blocks
 from hivemind.toolkit.text_formatting import dedent_and_strip
-from hivemind.toolkit.yaml_tools import save_yaml, yaml
+from hivemind.toolkit.yaml_tools import save_yaml, default_yaml
 from hivemind.minds.athena.utilities import save_progress, load_progress
 from hivemind.minds.athena.config import (
     USER_BIO,
@@ -627,7 +627,7 @@ class EventMemories(BaseModel):
         location = storage_dir / "current.yml"
         if not location.exists():
             return cls(storage_dir=storage_dir)
-        return cls(**yaml.load(location.read_text()))
+        return cls(**default_yaml.load(location.read_text()))
 
 
 def memory_merge_messaging(

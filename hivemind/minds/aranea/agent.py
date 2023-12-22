@@ -27,14 +27,14 @@ from typing import (
 )
 
 from langchain.schema import SystemMessage, BaseMessage
-from ruamel.yaml import YAMLError
+from ruamel.yaml import YAML, YAMLError
 from colorama import Fore
 
 from hivemind.config import configure_langchain_cache
 from hivemind.toolkit.models import super_creative_model, precise_model, query_model
 from hivemind.toolkit.text_extraction import ExtractionError, extract_blocks
 from hivemind.toolkit.text_formatting import dedent_and_strip
-from hivemind.toolkit.yaml_tools import yaml
+from hivemind.toolkit.yaml_tools import dump_yaml_str, default_yaml
 from hivemind.toolkit.id_generation import (
     utc_timestamp,
     IdGenerator as DefaultIdGenerator,
@@ -73,7 +73,7 @@ class Concept(Enum):
     LAST_READ_MAIN_TASK_OWNER_MESSAGE = "LAST READ MAIN TASK OWNER MESSAGE"
 
 
-def print_messages(messages: Sequence[BaseMessage]) -> str:
+def as_printable(messages: Sequence[BaseMessage]) -> str:
     """Print LangChain messages."""
     return "\n\n---\n\n".join(
         [f"[{message.type.upper()}]:\n\n{message.content}" for message in messages]
@@ -160,6 +160,11 @@ def replace_agent_id(
     )
 
 
+def replace_task_id(text_to_replace: str, task_id: TaskId, replacement: str) -> str:
+    """Replace task id with some other string."""
+    return text_to_replace.replace(task_id, f"`{replacement}`")
+
+
 @dataclass(frozen=True)
 class Message:
     """Data for a message."""
@@ -191,12 +196,12 @@ class TaskStatusChange:
     """Data for changing the status of a subtask."""
 
     changing_agent: RuntimeId
-    subtask_id: TaskId
+    task_id: TaskId
     old_status: TaskWorkStatus
     new_status: TaskWorkStatus
 
     def __str__(self) -> str:
-        return f"{self.changing_agent}: I've updated the status of task {self.subtask_id} from {self.old_status.value} to {self.new_status.value}."
+        return f"{self.changing_agent}: I've updated the status of task {self.task_id} from {self.old_status.value} to {self.new_status.value}."
 
 
 @dataclass(frozen=True)
@@ -210,12 +215,36 @@ class SubtaskFocus:
         return f"{self.owner_id}: I've changed focus to subtask {self.subtask_id}."
 
 
-EventData = Message | SubtaskIdentification | TaskStatusChange | SubtaskFocus
+@dataclass(frozen=True)
+class TaskDescriptionUpdate:
+    """Data for updating the description of a task."""
+
+    changing_agent: RuntimeId
+    task_id: TaskId
+    old_description: str
+    new_description: str
+    reason: str
+
+    def __str__(self) -> str:
+        return f"{self.changing_agent}: I've updated the description of task {self.task_id}. Reason: {self.reason.rstrip('.')}."
 
 
-def replace_task_id(text_to_replace: str, task_id: TaskId, replacement: str) -> str:
-    """Replace task id with some other string."""
-    return text_to_replace.replace(task_id, f"`{replacement}`")
+@dataclass(frozen=True)
+class Thought:
+    """Data for a thought."""
+
+    agent_id: RuntimeId
+    content: str
+
+
+EventData = (
+    Message
+    | SubtaskIdentification
+    | TaskStatusChange
+    | SubtaskFocus
+    | TaskDescriptionUpdate
+    | Thought
+)
 
 
 @dataclass
@@ -223,7 +252,8 @@ class Event:
     """An event in the event log."""
 
     data: EventData
-    task_id: TaskId
+    generating_task_id: TaskId
+    """Id of the task that generated the event."""
     id_generator: IdGenerator
     id: EventId = field(init=False)
     timestamp: str = field(default_factory=utc_timestamp)
@@ -241,14 +271,21 @@ class Event:
         pov_id: RuntimeId,
         other_id: RuntimeId,
         other_name: str,
-        task_id_replacement: str | None = None,
+        task_id_replacement: dict[TaskId, str] | None = None,
+        subtask_executor_replacement: dict[RuntimeId, str] | None = None,
     ) -> str:
         """String representation of the event with a point of view from a certain executor."""
         event_printout = replace_agent_id(str(self), "You", pov_id)
         event_printout = replace_agent_id(event_printout, other_name, other_id)
-        if not task_id_replacement or not isinstance(self.data, TaskStatusChange):
+        if not task_id_replacement:  # or not isinstance(self.data, TaskStatusChange):
             return event_printout
-        return replace_task_id(event_printout, self.task_id, task_id_replacement)
+        for task_id, replacement in task_id_replacement.items():
+            event_printout = replace_task_id(event_printout, task_id, replacement)
+        if not subtask_executor_replacement:
+            return event_printout
+        for executor_id, replacement in subtask_executor_replacement.items():
+            event_printout = replace_agent_id(event_printout, replacement, executor_id)
+        return event_printout
 
     def serialize(self) -> dict[str, Any]:
         """Serialize the event."""
@@ -368,14 +405,19 @@ class EventLog:
         pov_id: RuntimeId,
         other_id: RuntimeId,
         other_name: str,
-        task_id_replacement: str | None = None,
+        task_id_replacement: dict[TaskId, str] | None = None,
+        subtask_executor_replacement: dict[RuntimeId, str] | None = None,
     ) -> str:
         """String representation of the event log with a point of view from a certain executor."""
         return (
             "\n".join(
                 [
                     event.to_str_with_pov(
-                        pov_id, other_id, other_name, task_id_replacement
+                        pov_id,
+                        other_id,
+                        other_name,
+                        task_id_replacement,
+                        subtask_executor_replacement,
                     )
                     for event in self.events
                 ]
@@ -496,21 +538,6 @@ class Task:
     @property
     def as_main_task_printout(self) -> str:
         """String representation of the task as it would appear as a main task."""
-        # Id: {id}
-        # Owner: {owner}
-        # Work Status: {status}
-        # Event Status: {event_status}
-
-        # template = """
-        # {description}
-        # """
-        # return dedent_and_strip(template).format(
-        # id=self.id,
-        # owner=self.owner_id,
-        # status=self.work_status.value,
-        # event_status=self.event_status.value,
-        # description=self.description,
-        # )
         return str(self.description)
 
     def __str__(self) -> str:
@@ -553,21 +580,34 @@ class Task:
     ) -> str:
         """Format an event log."""
         assert self.executor_id is not None
+
+        # use case for executor pov is for printing recent events log
         if pov == Concept.EXECUTOR:
+            task_id_replacement = {
+                self.id: Concept.MAIN_TASK.value,
+            }
+            subtask_executor_replacement = {
+                subtask.executor_id: f"{Concept.EXECUTOR.value} for subtask {subtask.id}"
+                for subtask in self.subtasks
+                if subtask.executor_id is not None
+            }
             return event_log.to_str_with_pov(
                 pov_id=self.executor_id,
                 other_id=self.owner_id,
                 other_name=Concept.MAIN_TASK_OWNER.value,
-                task_id_replacement=Concept.MAIN_TASK.value,
+                task_id_replacement=task_id_replacement,
+                subtask_executor_replacement=subtask_executor_replacement,
             )
+
+        # use case for main task owner pov is for printing subtask discussion log when focused on a subtask
         assert (
             self.name is not None
         ), "If POV in a task discussion is from the main task owner, the task must have a name."
+        task_id_replacement = None
         return event_log.to_str_with_pov(
             pov_id=self.owner_id,
             other_id=self.executor_id,
             other_name=Concept.EXECUTOR.value,
-            task_id_replacement=self.name,
         )
 
     def discussion(
@@ -708,7 +748,7 @@ class ActionDecision:
     @classmethod
     def from_yaml_str(cls, yaml_str: str) -> Self:
         """Create an action decision from a YAML string."""
-        return cls(**yaml.load(yaml_str))
+        return cls(**default_yaml.load(yaml_str))
 
     def validate_action(self, valid_actions: Iterable[str]) -> None:
         """Validate that the action is allowed."""
@@ -971,7 +1011,7 @@ class Orchestrator:
             self.blueprint.rank = self.rank
         # assume that at the point of saving, all executors have been saved and so would have a rank
         assert self.blueprint.rank is not None, "Rank must not be None when saving."
-        yaml.dump(self.serialize(), self.serialization_location)
+        default_yaml.dump(self.serialize(), self.serialization_location)
 
     def accepts(self, task: Task) -> bool:
         """Decides whether the orchestrator accepts a task."""
@@ -1165,7 +1205,7 @@ class Orchestrator:
         ]
         return query_and_extract_reasoning(
             messages,
-            preamble=f"Generating reasoning for {self.role.value} in {ActionModeName.DEFAULT.value} state...\n{print_messages(messages)}",
+            preamble=f"Generating reasoning for {self.role.value} in {ActionModeName.DEFAULT.value} state...\n{as_printable(messages)}",
             printout=VERBOSE,
         )
 
@@ -1322,7 +1362,7 @@ class Orchestrator:
         ]
         return query_and_extract_reasoning(
             messages,
-            preamble=f"Generating reasoning for {self.role.value} in {ActionModeName.DEFAULT.value} state...\n{print_messages(messages)}",
+            preamble=f"Generating reasoning for {self.role.value} in {ActionModeName.DEFAULT.value} state...\n{as_printable(messages)}",
             printout=VERBOSE,
         )
 
@@ -1356,7 +1396,7 @@ class Orchestrator:
         action_choice = query_model(
             model=precise_model,
             messages=messages,
-            preamble=f"Choosing next action...\n{print_messages(messages)}",
+            preamble=f"Choosing next action...\n{as_printable(messages)}",
             color=AGENT_COLOR,
         )
         if not (
@@ -1395,7 +1435,7 @@ class Orchestrator:
                     data=Message(
                         sender=self.id, recipient=self.task.owner_id, content=message
                     ),
-                    task_id=self.task.id,
+                    generating_task_id=self.task.id,
                     id_generator=self.id_generator,
                 ),
             ],
@@ -1457,7 +1497,7 @@ class Orchestrator:
         ]
         return query_and_extract_reasoning(
             messages,
-            preamble=f"Generating subtask extraction reasoning...\n{print_messages(messages)}",
+            preamble=f"Generating subtask extraction reasoning...\n{as_printable(messages)}",
             printout=printout,
         )
 
@@ -1593,7 +1633,7 @@ class Orchestrator:
                 recipient=subtask.executor_id,
                 content=message,
             ),
-            task_id=subtask.id,
+            generating_task_id=subtask.id,
             id_generator=self.id_generator,
         )
 
@@ -1607,11 +1647,11 @@ class Orchestrator:
         status_change_event = Event(
             data=TaskStatusChange(
                 changing_agent=self.id,
-                subtask_id=subtask.id,
+                task_id=subtask.id,
                 old_status=subtask.work_status,
                 new_status=TaskWorkStatus.IN_PROGRESS,
             ),
-            task_id=self.task.id,
+            generating_task_id=self.task.id,
             id_generator=self.id_generator,
         )
         report_status_change = (
@@ -1628,7 +1668,7 @@ class Orchestrator:
                 owner_id=self.id,
                 subtask_id=subtask.id,
             ),
-            task_id=self.task.id,
+            generating_task_id=self.task.id,
             id_generator=self.id_generator,
         )
 
@@ -1641,7 +1681,7 @@ class Orchestrator:
         new_subtask = query_model(
             model=precise_model,
             messages=messages,
-            preamble=f"Extracting subtask...\n{print_messages(messages)}",
+            preamble=f"Extracting subtask...\n{as_printable(messages)}",
             color=AGENT_COLOR,
         )
         extracted_subtask = extract_blocks(
@@ -1651,7 +1691,9 @@ class Orchestrator:
             raise ExtractionError(
                 f"Could not extract subtask from the result:\n{new_subtask}"
             )
-        extracted_subtask = str(yaml.load(extracted_subtask[-1])["subtask_identified"])
+        extracted_subtask = str(
+            default_yaml.load(extracted_subtask[-1])["subtask_identified"]
+        )
         subtask_validation = self.validate_subtask_identification(extracted_subtask)
         subtask_identification_event = Event(
             data=SubtaskIdentification(
@@ -1659,7 +1701,7 @@ class Orchestrator:
                 subtask=extracted_subtask,
                 validation_result=subtask_validation,
             ),
-            task_id=self.task.id,
+            generating_task_id=self.task.id,
             id_generator=self.id_generator,
         )
         if not subtask_validation.valid:
@@ -1720,10 +1762,33 @@ class Orchestrator:
             raise NotImplementedError
         if decision.action_name == ActionName.WAIT.value:
             raise NotImplementedError
-        breakpoint()
-        # > prompt adjustments > in ActionReasoningNotes.SUBTASK_STATUS_INFO, convert "task" to "subtask" > make ORCHESTRATOR ACTIONS and ACTION CHOICES terms consistent > when pausing subtask discussion, add event to both subtask and main task > recent events and subtask discussion no longer overlap, so update state text to reflect that > add fake timestamps (advance automatically by 1 second each time) > parametrize values in generate_subtask_extraction_reasoning
+
+        # ....
+        # > subtask identification event: also add task id to event printout
+        # > move all these tasks to act()
+        # > when mutating agent, either update knowledge, or tweak a single parameter
+        # > add ability to output followup actions when performing actions
+        # > separate out reasoning generation into its own class
+        # > add cost as rating factor
+        # > blueprint: temperature parameter
+        # > novelty parameter: likelihood of choosing unproven subagent
+        # > when mutating agent, use component optimization of other best agents (that have actual trajectories)
+        # > new mutation has a provisional rating based on the rating of the agent it was mutated from; but doesn't appear in optimization list until it has a trajectory
+        # > model parameter: explain that cheaper model costs less but may reduce accuracy
+        # > reasoning generation: term references: make it clear that it's fine to use capitalized concepts (there's an inconsistency right now)
+        # > turn printout into config parameter for aranea
+        # > in ActionReasoningNotes.SUBTASK_STATUS_INFO, convert "task" to "subtask"
+        # > make ORCHESTRATOR ACTIONS and ACTION CHOICES terms consistent
+        # > when pausing subtask discussion, add event to both subtask and main task
+        # > recent events and subtask discussion no longer overlap, so update state text to reflect that
+        # > add fake timestamps (advance automatically by 1 second each time)
+        # > parametrize values in generate_subtask_extraction_reasoning
+        # > in task status change event, add change reason
         # > close subtask: adds event that is a summary of the new items in the discussion to maintain state continuity
         # > "The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistatn API."
+        # update recent events limit to 15
+        # implement next action
+        breakpoint()
         raise NotImplementedError
         # > when selecting executor, task success is based on similar tasks that executor dealt with before
 
@@ -1735,7 +1800,7 @@ class Orchestrator:
                 recipient=self.id,
                 content=message,
             ),
-            task_id=self.task.id,
+            generating_task_id=self.task.id,
             id_generator=self.id_generator,
         )
 
@@ -1747,7 +1812,7 @@ class Orchestrator:
                 recipient=self.task.owner_id,
                 content=message,
             ),
-            task_id=self.task.id,
+            generating_task_id=self.task.id,
             id_generator=self.id_generator,
         )
 
@@ -1796,7 +1861,7 @@ class Orchestrator:
         ]
         return query_and_extract_reasoning(
             messages,
-            preamble=f"Generating reasoning for updating the main task...\n{print_messages(messages)}",
+            preamble=f"Generating reasoning for updating the main task...\n{as_printable(messages)}",
             printout=printout,
         )
 
@@ -1816,7 +1881,7 @@ class Orchestrator:
 
     def generate_main_task_description_update(
         self,
-    ) -> tuple[TaskDescription, str | None]:
+    ) -> tuple[TaskDescription, str | None] | None:
         """Generate an update to the main task description."""
         reasoning = f"""
         1. Review the {Concept.MAIN_TASK_INFORMATION.value} and the {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} to recall the current status and objectives of the {Concept.MAIN_TASK.value}. Note any specific requirements or key details that may be affected by new information.
@@ -1871,7 +1936,7 @@ class Orchestrator:
 
         {reasoning_output_instructions}
 
-        After this block, use the information from the reasoning process to rewrite the {MAIN_TASK_DESCRIPTION} and {MAIN_TASK_DEFINITION_OF_DONE} sections to reflect the new information, in this format:
+        After this block, if the reasoning process determined that there is new information about the {MAIN_TASK}, use the information from the reasoning process to rewrite the {MAIN_TASK_DESCRIPTION} and {MAIN_TASK_DEFINITION_OF_DONE} sections to reflect the new information, in this format:
         ```start_of_main_task_info
         main_task_information: |-
           {{updated main task information}}
@@ -1882,8 +1947,14 @@ class Orchestrator:
         needed_followup: |-
           {{any followup actions you intend, or `NONE`}}
         ```end_of_main_task_info
+
+        If there is no new information about the {MAIN_TASK}, then return the following:
+        ```start_of_main_task_info
+        NO NEW INFORMATION
+        ```end_of_main_task_info
         """
         task = dedent_and_strip(task).format(
+            MAIN_TASK=Concept.MAIN_TASK.value,
             MAIN_TASK_DESCRIPTION=Concept.MAIN_TASK_INFORMATION.value,
             MAIN_TASK_DEFINITION_OF_DONE=Concept.MAIN_TASK_DEFINITION_OF_DONE.value,
             reasoning_steps=reasoning,
@@ -1896,7 +1967,7 @@ class Orchestrator:
         result = query_model(
             model=precise_model,
             messages=messages,
-            preamble=f"Updating main task description...\n{print_messages(messages)}",
+            preamble=f"Updating main task description...\n{as_printable(messages)}",
             color=AGENT_COLOR,
         )
         extracted_result = extract_blocks(result, "start_of_main_task_info")
@@ -1904,8 +1975,10 @@ class Orchestrator:
             raise ExtractionError(
                 f"Could not extract main task description from the result:\n{result}"
             )
+        if "NO NEW INFORMATION" in extracted_result[-1]:
+            return None
         try:
-            extracted_result = yaml.load(extracted_result[-1])
+            extracted_result = default_yaml.load(extracted_result[-1])
         except YAMLError as error:
             raise ExtractionError(
                 f"Could not extract main task description dictionary from the result:\n{result}"
@@ -1913,39 +1986,51 @@ class Orchestrator:
         return (
             TaskDescription(
                 information=extracted_result["main_task_information"],
-                definition_of_done=extracted_result["main_task_definition_of_done"],
+                definition_of_done=dump_yaml_str(
+                    extracted_result["main_task_definition_of_done"], YAML()
+                ),
             ),
             None
-            if "NONE" in (needed_followup := extracted_result["needed_followup"])
-            else needed_followup,
+            if "NONE" in (followup_needed := extracted_result["needed_followup"])
+            else followup_needed,
         )
 
     def update_main_task_description(self) -> None:
         """Update the main task from new events."""
-
+        update_result = self.generate_main_task_description_update()
+        if update_result is None:
+            return
         (
             updated_task_description,
-            needed_followup,
-        ) = self.generate_main_task_description_update()
-
-        # > create events from this
-        # > account for when needed_followup is NONE
-        breakpoint()
-        raise NotImplementedError(
-            "TODO: This is where we update the main task description based on new events (such as info from main task owner)."
+            followup_needed,
+        ) = update_result
+        task_update_event = Event(
+            data=TaskDescriptionUpdate(
+                changing_agent=self.id,
+                task_id=self.task.id,
+                old_description=str(self.task.description),
+                new_description=str(updated_task_description),
+                reason=f"new information from latest events in {Concept.RECENT_EVENTS_LOG.value}",
+            ),
+            generating_task_id=self.task.id,
+            id_generator=self.id_generator,
         )
-        # > update default state_update_frequency to be more
-        # > when mutating agent, either update knowledge, or tweak a single parameter
-        # > add ability to output followup actions when performing actions
-        # > separate out reasoning generation into its own class
-        # > add cost as rating factor
-        # > temperature parameter
-        # > novelty parameter: likelihood of choosing unproven subagent
-        # > when mutating agent, use component optimization of other best agents (that have actual trajectories)
-        # > new mutation has a provisional rating based on the rating of the agent it was mutated from; but doesn't appear in optimization list until it has a trajectory
-        # > model parameter: explain that cheaper model costs less but may reduce accuracy
-        # > reasoning generation: term references: make it clear that it's fine to use capitalized concepts (there's an inconsistency right now)
-        # > turn printout into config parameter for aranea
+        followup_event = (
+            None
+            if followup_needed is None
+            else Event(
+                data=Thought(
+                    agent_id=self.id,
+                    content=followup_needed,
+                ),
+                generating_task_id=self.task.id,
+                id_generator=self.id_generator,
+            )
+        )
+        self.task.description = updated_task_description
+        self.event_log.add(task_update_event)
+        if followup_event is not None:
+            self.event_log.add(followup_event)
 
     def add_to_event_log(self, events: Sequence[Event]) -> None:
         """Add events to the event log."""
@@ -2005,11 +2090,11 @@ class Orchestrator:
                 Event(
                     data=TaskStatusChange(
                         changing_agent=self.id,
-                        subtask_id=self.task.id,
+                        task_id=self.task.id,
                         old_status=old_work_status,
                         new_status=self.task.work_status,
                     ),
-                    task_id=self.task.id,
+                    generating_task_id=self.task.id,
                     id_generator=self.id_generator,
                 )
             ]
@@ -2030,7 +2115,7 @@ class Orchestrator:
         delegator: "Delegator",
     ) -> Self:
         """Deserialize an Aranea orchestrator from a YAML file."""
-        blueprint_data = yaml.load(blueprint_location)
+        blueprint_data = default_yaml.load(blueprint_location)
         blueprint_data["task_history"] = tuple(blueprint_data["task_history"])
         return cls(
             blueprint=Blueprint(**blueprint_data),
@@ -2274,7 +2359,7 @@ def default_bot_base_capabilities() -> list["BaseCapability"]:
 
 
 @dataclass
-class Aranea:
+class Swarm:
     """Main interfacing class for the agent."""
 
     files_dir: Path = Path(".data/aranea")
@@ -2633,7 +2718,7 @@ async def test_full() -> None:
     """Run a full flow on an example task."""
     with shelve.open(".data/test/aranea_human_reply_cache", writeback=True) as cache:
         human_tester = Human(reply_cache=cache)
-        aranea = Aranea(
+        aranea = Swarm(
             files_dir=Path(".data/test/aranea"),
             base_capability_advisor=human_tester,
             work_validator=human_tester,

@@ -2,11 +2,11 @@
 
 from pathlib import Path
 from typing import Any
-from hivemind.toolkit.yaml_tools import yaml
+from hivemind.toolkit.yaml_tools import default_yaml
 
 
 CONFIG_DATA: dict[str, Any] = (
-    yaml.load(CONFIG_DATA_LOCATION)
+    default_yaml.load(CONFIG_DATA_LOCATION)
     if (
         CONFIG_DATA_LOCATION := Path("hivemind/minds/athena/.data/config_data.yml")
     ).exists()
@@ -38,7 +38,7 @@ if not (SECRETS_LOCATION := DATA_DIR / "secrets.yml").exists():
     raise FileNotFoundError(
         f"Secrets file not found at {SECRETS_LOCATION}. Please create one."
     )
-SECRETS: dict[str, str] = yaml.load(SECRETS_LOCATION)
+SECRETS: dict[str, str] = default_yaml.load(SECRETS_LOCATION)
 CONTEXT_MEMORY_AUTH = {
     "username": SECRETS["weaviate_username"],
     "password": SECRETS["weaviate_password"],
