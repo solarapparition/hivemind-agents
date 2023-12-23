@@ -199,9 +199,10 @@ class TaskStatusChange:
     task_id: TaskId
     old_status: TaskWorkStatus
     new_status: TaskWorkStatus
+    reason: str
 
     def __str__(self) -> str:
-        return f"{self.changing_agent}: I've updated the status of task {self.task_id} from {self.old_status.value} to {self.new_status.value}."
+        return f"{self.changing_agent}: I've updated the status of task {self.task_id} from {self.old_status.value} to {self.new_status.value}. Reason: {self.reason.rstrip('.')}."
 
 
 @dataclass(frozen=True)
@@ -1642,20 +1643,21 @@ class Orchestrator:
         assert self.focused_subtask is not None
         message_event = self.subtask_message(self.focused_subtask, message_text)
         subtask.event_log.add(message_event)
+        report_status_change = (
+            not initial and subtask.work_status != TaskWorkStatus.IN_PROGRESS
+        )
+        subtask.work_status = TaskWorkStatus.IN_PROGRESS
         status_change_event = Event(
             data=TaskStatusChange(
                 changing_agent=self.id,
                 task_id=subtask.id,
                 old_status=subtask.work_status,
                 new_status=TaskWorkStatus.IN_PROGRESS,
+                reason=f"Sent message to {Concept.EXECUTOR.value} regarding subtask.",
             ),
             generating_task_id=self.task.id,
             id_generator=self.id_generator,
         )
-        report_status_change = (
-            not initial and subtask.work_status != TaskWorkStatus.IN_PROGRESS
-        )
-        subtask.work_status = TaskWorkStatus.IN_PROGRESS
         return [status_change_event] if report_status_change else []
 
     def focus_subtask(self, subtask: Task) -> Event:
@@ -1761,8 +1763,8 @@ class Orchestrator:
         if decision.action_name == ActionName.WAIT.value:
             raise NotImplementedError
 
-        # ....
         # in task status change event, add change reason
+        # ....
         # > recent events and subtask discussion no longer overlap, so update state text to reflect that
         # subtask identification event: also add task id to event printout
         # > in ActionReasoningNotes.SUBTASK_STATUS_INFO, convert "task" to "subtask"
@@ -2078,6 +2080,9 @@ class Orchestrator:
             and last_event.data.recipient != self.task.owner_id
         ):
             raise NotImplementedError
+        if self.task.work_status != TaskWorkStatus.BLOCKED:
+            raise NotImplementedError
+        status_change_reason = "Task is blocked until reply to message."
         events = (
             [
                 Event(
@@ -2086,6 +2091,7 @@ class Orchestrator:
                         task_id=self.task.id,
                         old_status=old_work_status,
                         new_status=self.task.work_status,
+                        reason=status_change_reason,
                     ),
                     generating_task_id=self.task.id,
                     id_generator=self.id_generator,
