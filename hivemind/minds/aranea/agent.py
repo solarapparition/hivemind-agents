@@ -756,9 +756,8 @@ class ActionDecision:
     def from_yaml_str(cls, yaml_str: str) -> Self:
         """Create an action decision from a YAML string."""
         data = default_yaml.load(yaml_str)
-        if "NONE" in data["additional_thoughts"]:
+        if "NONE" in data.get("additional_thoughts"):
             data["additional_thoughts"] = None
-        data["additional_thoughts"] = None # disabled
         return cls(**data)
 
     def validate_action(self, valid_actions: Iterable[str]) -> None:
@@ -832,7 +831,7 @@ class SubtaskIdentifcationResult:
     def from_yaml_str(cls, yaml_str: str) -> Self:
         """Create a subtask identification result from a YAML string."""
         data = default_yaml.load(yaml_str)
-        if "NONE" in data["additional_thoughts"]:
+        if "NONE" in data.get("additional_thoughts"):
             data["additional_thoughts"] = None
         return cls(**data)
 
@@ -1140,8 +1139,6 @@ class Orchestrator:
           {{justifications}}
         action_choice: |-
           {{action_choice}} # must be one of the actions listed above, in the same format
-        additional_thoughts: |-
-          {{additional_thoughts}} # additional thoughts or comments not captured by the action_choice, OR "NONE"
         ```end_of_action_choice_output
         Any additional comments or thoughts can be added before or after the output blocks.
         """
@@ -1544,8 +1541,6 @@ class Orchestrator:
         ```start_of_subtask_identification_output
         identified_subtask: |- # high-level, single-sentence description of the subtask
           {{identified_subtask}}
-        additional_thoughts: |- # additional thoughts or comments not captured by the identified_subtask, OR "NONE"
-          {{additional_thoughts}}
         ```end_of_subtask_identification_output
         Any additional comments or thoughts can be added before or after the output blocks.
         """
@@ -1803,8 +1798,8 @@ class Orchestrator:
         if decision.action_name == ActionName.WAIT.value:
             raise NotImplementedError
 
-        # ....
         # (next_action_implementation) > close subtask: adds event that is a summary of the new items in the discussion to maintain state continuity # "The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistant API."
+        # ....
         # separate out reasoning generation into its own class
         # > add fake timestamps (advance automatically by 1 second each time)
         # turn printout into configurable parameter for aranea
@@ -1971,8 +1966,6 @@ class Orchestrator:
           - {{requirement 1}}
           - {{requirement 2}}
           - [... etc.]
-        needed_followup: |-
-          {{any followup actions you intend, or `NONE`}}
         ```end_of_main_task_info
 
         If there is no new information about the {MAIN_TASK}, then return the following:
@@ -2018,7 +2011,7 @@ class Orchestrator:
                 ),
             ),
             None
-            if "NONE" in (followup_needed := extracted_result["needed_followup"])
+            if "NONE" in (followup_needed := extracted_result.get("needed_followup"))
             else followup_needed,
         )
 
