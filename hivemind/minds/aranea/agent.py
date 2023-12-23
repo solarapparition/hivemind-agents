@@ -60,6 +60,7 @@ class Concept(Enum):
     MAIN_TASK_OWNER = "MAIN TASK OWNER"
     MAIN_TASK = "MAIN TASK"
     ORCHESTRATOR = "ORCHESTRATOR"
+    ORCHESTRATOR_ACTIONS = "ORCHESTRATOR ACTIONS"
     EXECUTOR = "EXECUTOR"
     RECENT_EVENTS_LOG = "RECENT EVENTS LOG"
     ORCHESTRATOR_INFORMATION_SECTIONS = "ORCHESTRATOR INFORMATION SECTIONS"
@@ -781,11 +782,11 @@ class OrchestratorReasoningNotes(Enum):
     """Notes for action reasoning."""
 
     OVERVIEW = "Provide a step-by-step, robust reasoning process for the orchestrator to sequentially think through the information it has access to so that it has the appropriate mental context for deciding what to do next. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind. Some things to note:"
-    ACTION_RESTRICTIONS = "The final action that the orchestrator decides on MUST be one of the ORCHESTRATOR ACTIONS described above. The orchestrator cannot perform any other actions."
-    FOCUSED_SUBTASK_RESTRICTIONS = f"The orchestrator cannot directly change the {Concept.FOCUSED_SUBTASK.value}. To focus on a different subtask, it must first use the {ActionName.PAUSE_SUBTASK_DISCUSSION} action first. Overall, the orchestrator should be focused on helping the EXECUTOR of the {Concept.FOCUSED_SUBTASK.value}, and will need strong reason to change its focus."
+    ACTION_RESTRICTIONS = f"The final action that the orchestrator decides on MUST be one of the {Concept.ORCHESTRATOR_ACTIONS.value} described above. The orchestrator cannot perform any other actions."
+    FOCUSED_SUBTASK_RESTRICTIONS = f"The orchestrator cannot directly change the {Concept.FOCUSED_SUBTASK.value}. To focus on a different subtask, it must first use the {ActionName.PAUSE_SUBTASK_DISCUSSION.value} action first. Overall, the orchestrator should be focused on helping the EXECUTOR of the {Concept.FOCUSED_SUBTASK.value}, and will need strong reason to change its focus."
     INFORMATION_RESTRICTIONS = f"Assume that the orchestrator has access to what's described in {Concept.ORCHESTRATOR_INFORMATION_SECTIONS.value} above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3."
     TERM_REFERENCES = """The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section"); however, only capitalize terms that are capitalized in the information sections—don't use capitalization as emphasis."""
-    SUBTASK_STATUS_INFO = f"Typically, tasks that are {TaskWorkStatus.COMPLETED.value}, {TaskWorkStatus.CANCELLED.value}, {TaskWorkStatus.IN_PROGRESS.value}, or {TaskWorkStatus.IN_VALIDATION.value} do not need immediate attention unless the orchestrator discovers information that changes the status of the subtask. Tasks that are {TaskWorkStatus.BLOCKED} will need action from the orchestrator to start or resume execution respectively."
+    SUBTASK_STATUS_INFO = f"Typically, subtasks that are {TaskWorkStatus.COMPLETED.value}, {TaskWorkStatus.CANCELLED.value}, {TaskWorkStatus.IN_PROGRESS.value}, or {TaskWorkStatus.IN_VALIDATION.value} do not need immediate attention unless the orchestrator discovers information that changes the status of the subtask. Subtasks that are {TaskWorkStatus.BLOCKED.value} will need action from the orchestrator to start or resume execution respectively."
     STEPS_RESTRICTIONS = "The reasoning process should be written in second person and be around 5-7 steps, though you can add substeps within a step (a, b, c, etc.) if it is complex."
     PROCEDURAL_SCRIPTING = "The reasoning steps can refer to the results of previous steps, and it may be effective to build up the orchestrator's mental context step by step, starting from basic information available, similar to writing a procedural script for a program but in natural language instead of code."
 
@@ -1175,7 +1176,7 @@ class Orchestrator:
 
         {base_info}
 
-        ## ORCHESTRATOR ACTIONS:
+        ## {ORCHESTRATOR_ACTIONS}:
         In its default state, the orchestrator can perform the following actions:
         {actions}
         """
@@ -1196,6 +1197,7 @@ class Orchestrator:
                 content=dedent_and_strip(context).format(
                     mission=ORCHESTRATOR_INSTRUCTOR_MISSION,
                     base_info=self.base_info,
+                    ORCHESTRATOR_ACTIONS=Concept.ORCHESTRATOR_ACTIONS.value,
                     actions=self.default_mode_actions,
                 )
             ),
@@ -1228,12 +1230,13 @@ class Orchestrator:
         template = """
         {default_mode_status}
 
-        ## ACTION CHOICES:
+        ## {ORCHESTRATOR_ACTIONS}:
         These are the actions you can currently perform.
         {default_mode_actions}
         """
         return dedent_and_strip(template).format(
             default_mode_status=self.default_mode_status,
+            ORCHESTRATOR_ACTIONS=Concept.ORCHESTRATOR_ACTIONS.value,
             default_mode_actions=self.default_mode_actions,
         )
 
@@ -1304,12 +1307,13 @@ class Orchestrator:
         template = """
         {subtask_mode_status}
 
-        ## ACTION CHOICES:
+        ## {ORCHESTRATOR_ACTIONS}:
         These are the actions you can currently perform.
         {subtask_mode_actions}
         """
         return dedent_and_strip(template).format(
             subtask_mode_status=self.subtask_mode_status,
+            ORCHESTRATOR_ACTIONS=Concept.ORCHESTRATOR_ACTIONS.value,
             subtask_mode_actions=self.subtask_mode_actions,
         )
 
@@ -1330,7 +1334,7 @@ class Orchestrator:
 
         {base_info}
 
-        ## ORCHESTRATOR ACTIONS:
+        ## {ORCHESTRATOR_ACTIONS}:
         The orchestrator is currently in a mode where it is discussing its FOCUSED SUBTASK with the SUBTASK EXECUTOR. Currently, the orchestrator can perform the following actions:
         {actions}
         """
@@ -1353,6 +1357,7 @@ class Orchestrator:
                 content=dedent_and_strip(context).format(
                     mission=ORCHESTRATOR_INSTRUCTOR_MISSION,
                     base_info=self.base_info,
+                    ORCHESTRATOR_ACTIONS=Concept.ORCHESTRATOR_ACTIONS.value,
                     actions=self.subtask_mode_actions,
                 )
             ),
@@ -1766,15 +1771,13 @@ class Orchestrator:
             raise NotImplementedError
 
         # ....
-        # > in ActionReasoningNotes.SUBTASK_STATUS_INFO, convert "task" to "subtask"
-        # turn printout into configurable parameter for aranea
-        # > make ORCHESTRATOR ACTIONS and ACTION CHOICES terms consistent
-        # > add fake timestamps (advance automatically by 1 second each time)
         # reasoning generation: term references: make it clear that it's fine to use capitalized concepts (there's an inconsistency right now)
         # add ability to output followup actions when performing actions
         # update default recent events limit to 15
         # (next_action_implementation) > close subtask: adds event that is a summary of the new items in the discussion to maintain state continuity # "The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistant API."
         # separate out reasoning generation into its own class
+        # > add fake timestamps (advance automatically by 1 second each time)
+        # turn printout into configurable parameter for aranea
         breakpoint()
         raise NotImplementedError
         # > blueprint: model parameter # explain that cheaper model costs less but may reduce accuracy
