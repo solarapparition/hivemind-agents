@@ -1772,7 +1772,6 @@ class Orchestrator:
 
         # ....
         # add ability to output followup actions when performing actions
-        # update default recent events limit to 15
         # (next_action_implementation) > close subtask: adds event that is a summary of the new items in the discussion to maintain state continuity # "The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistant API."
         # separate out reasoning generation into its own class
         # > add fake timestamps (advance automatically by 1 second each time)
@@ -2376,7 +2375,7 @@ class Swarm:
         default_factory=lambda: Human(name="Human Validator")
     )
     """Agent that approves or rejects work."""
-    recent_events_size: int = 10
+    recent_events_size: int = 15
     """Number of recent events to display in orchestrators' event logs."""
     auto_wait: bool = True
     """Whether orchestrators will automatically wait for their executors. If disabled, orchestrators may perform other actions while an executor works on a task."""
