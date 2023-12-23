@@ -756,7 +756,9 @@ class ActionDecision:
     def from_yaml_str(cls, yaml_str: str) -> Self:
         """Create an action decision from a YAML string."""
         data = default_yaml.load(yaml_str)
-        if "NONE" in data.get("additional_thoughts"):
+        if (
+            additional_thoughts := data.get("additional_thoughts")
+        ) and "NONE" in additional_thoughts:
             data["additional_thoughts"] = None
         return cls(**data)
 
@@ -831,7 +833,9 @@ class SubtaskIdentifcationResult:
     def from_yaml_str(cls, yaml_str: str) -> Self:
         """Create a subtask identification result from a YAML string."""
         data = default_yaml.load(yaml_str)
-        if "NONE" in data.get("additional_thoughts"):
+        if (
+            additional_thoughts := data.get("additional_thoughts")
+        ) and "NONE" in additional_thoughts:
             data["additional_thoughts"] = None
         return cls(**data)
 
@@ -2011,7 +2015,8 @@ class Orchestrator:
                 ),
             ),
             None
-            if "NONE" in (followup_needed := extracted_result.get("needed_followup"))
+            if (followup_needed := extracted_result.get("needed_followup"))
+            and "NONE" in followup_needed
             else followup_needed,
         )
 
