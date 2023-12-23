@@ -183,11 +183,12 @@ class SubtaskIdentification:
 
     owner_id: RuntimeId
     subtask: str
+    subtask_id: TaskId
     validation_result: ValidationResult
 
     def __str__(self) -> str:
         if self.validation_result.valid:
-            return f"{self.owner_id}: Successfully identified subtask: `{self.subtask}`"
+            return f"{self.owner_id}: Successfully identified subtask: `{self.subtask}`; assigned subtask id: `{self.subtask_id}`."
         return f'{self.owner_id}: Attempted to identify subtask `{self.subtask}`, but the validator did not approve the subtask, with the following feedback: "{self.validation_result.feedback}"'
 
 
@@ -1695,10 +1696,19 @@ class Orchestrator:
             default_yaml.load(extracted_subtask[-1])["subtask_identified"]
         )
         subtask_validation = self.validate_subtask_identification(extracted_subtask)
+        subtask = Task(
+            name=extracted_subtask,
+            owner_id=self.id,
+            rank_limit=None if self.rank_limit is None else self.rank_limit - 1,
+            description=TaskDescription(information=extracted_subtask),
+            validator=self.task.validator,
+            id_generator=self.id_generator,
+        )
         subtask_identification_event = Event(
             data=SubtaskIdentification(
                 owner_id=self.id,
                 subtask=extracted_subtask,
+                subtask_id=subtask.id,
                 validation_result=subtask_validation,
             ),
             generating_task_id=self.task.id,
@@ -1709,14 +1719,6 @@ class Orchestrator:
                 pause_execution=PauseExecution(False),
                 new_events=[subtask_identification_event],
             )
-        subtask = Task(
-            name=extracted_subtask,
-            owner_id=self.id,
-            rank_limit=None if self.rank_limit is None else self.rank_limit - 1,
-            description=TaskDescription(information=extracted_subtask),
-            validator=self.task.validator,
-            id_generator=self.id_generator,
-        )
         self.delegator.assign_executor(subtask, self.recent_events_size, self.auto_wait)
         assert subtask.executor is not None, "Task executor assignment failed."
         self.add_subtask(subtask)
@@ -1764,7 +1766,6 @@ class Orchestrator:
             raise NotImplementedError
 
         # ....
-        # subtask identification event: also add task id to event printout
         # > in ActionReasoningNotes.SUBTASK_STATUS_INFO, convert "task" to "subtask"
         # turn printout into configurable parameter for aranea
         # > make ORCHESTRATOR ACTIONS and ACTION CHOICES terms consistent
@@ -1772,7 +1773,7 @@ class Orchestrator:
         # reasoning generation: term references: make it clear that it's fine to use capitalized concepts (there's an inconsistency right now)
         # add ability to output followup actions when performing actions
         # update default recent events limit to 15
-        # (next_action_implementation) > close subtask: adds event that is a summary of the new items in the discussion to maintain state continuity # "The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistatn API."
+        # (next_action_implementation) > close subtask: adds event that is a summary of the new items in the discussion to maintain state continuity # "The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistant API."
         # separate out reasoning generation into its own class
         breakpoint()
         raise NotImplementedError
