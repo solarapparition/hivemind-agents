@@ -1471,20 +1471,14 @@ class Orchestrator:
         """
         request = f"""
         ## REQUEST FOR YOU:
-        Provide a step-by-step, robust reasoning process for the orchestrator to a) sequentially process the information in the information sections it has access to so that it can identify a new subtask that is not yet identified, and b) understand what MSI is and follow its principles. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind before they perform subtask identification. Some things to note:
-        - Assume that the orchestrator has access to what's described in {Concept.ORCHESTRATOR_INFORMATION_SECTIONS.value} above, but no other information, except for general world knowledge that is available to a standard LLM like GPT-3.
-        - The orchestrator requires precise references to information in its information sections, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "MAIN TASK" or "KNOWLEDGE section").
+        Provide a step-by-step, robust reasoning process for the orchestrator to a) understand what MSI is and follow its principles, and b) sequentially process the information in the information sections it has access to so that it can identify a new subtask that is not yet identified. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind before they perform subtask identification. Some things to note:
+        - {OrchestratorReasoningNotes.INFORMATION_RESTRICTIONS.value}
+        - {OrchestratorReasoningNotes.TERM_REFERENCES.value}
         - In its current state, the orchestrator is not able to perform any other actions besides subtask identification and the reasoning preceeding it.
-        - The reasoning process should be written in second person and be around 5-7 steps, though you can add substeps (a, b, c, etc.) within a step if it is complex.
-        - The reasoning steps can refer to the results of previous steps, and it may be effective to build up the orchestrator's mental context step by step, starting from basic information available, similar to writing a procedural script for a program but in natural language instead of code.
+        - {OrchestratorReasoningNotes.STEPS_RESTRICTIONS.value}
+        - {OrchestratorReasoningNotes.PROCEDURAL_SCRIPTING.value}
         - The orchestrator should only perform the subtask identification on the _last_ step, after it has considered _all_ the information it needs. No other actions need to be performed after subtask identification.
-        Provide the reasoning process in the following format:
-        ```start_of_reasoning_process
-        1. {{reasoning step 1}}
-        2. {{reasoning step 2}}
-        3. [... etc.]
-        ```end_of_reasoning_process
-        You may add comments or thoughts before or after the reasoning process, but the reasoning process block itself must only contain the reasoning steps, directed at the orchestrator.
+        {{output_instructions}}
         """
         messages = [
             SystemMessage(
@@ -1493,7 +1487,11 @@ class Orchestrator:
                     msi=MODULAR_SUBTASK_IDENTIFICATION,
                 )
             ),
-            SystemMessage(content=dedent_and_strip(request)),
+            SystemMessage(
+                content=dedent_and_strip(request).format(
+                    output_instructions=REASONING_OUTPUT_INSTRUCTIONS
+                )
+            ),
         ]
         return query_and_extract_reasoning(
             messages,
@@ -1764,33 +1762,28 @@ class Orchestrator:
             raise NotImplementedError
 
         # ....
-        # > subtask identification event: also add task id to event printout
-        # > move all these tasks to act()
-        # > when mutating agent, either update knowledge, or tweak a single parameter
-        # > add ability to output followup actions when performing actions
-        # > separate out reasoning generation into its own class
-        # > add cost as rating factor
-        # > blueprint: temperature parameter
-        # > novelty parameter: likelihood of choosing unproven subagent
-        # > when mutating agent, use component optimization of other best agents (that have actual trajectories)
-        # > new mutation has a provisional rating based on the rating of the agent it was mutated from; but doesn't appear in optimization list until it has a trajectory
-        # > model parameter: explain that cheaper model costs less but may reduce accuracy
-        # > reasoning generation: term references: make it clear that it's fine to use capitalized concepts (there's an inconsistency right now)
-        # > turn printout into config parameter for aranea
-        # > in ActionReasoningNotes.SUBTASK_STATUS_INFO, convert "task" to "subtask"
-        # > make ORCHESTRATOR ACTIONS and ACTION CHOICES terms consistent
-        # > when pausing subtask discussion, add event to both subtask and main task
+        # in task status change event, add change reason
         # > recent events and subtask discussion no longer overlap, so update state text to reflect that
+        # subtask identification event: also add task id to event printout
+        # > in ActionReasoningNotes.SUBTASK_STATUS_INFO, convert "task" to "subtask"
+        # turn printout into configurable parameter for aranea
+        # > make ORCHESTRATOR ACTIONS and ACTION CHOICES terms consistent
         # > add fake timestamps (advance automatically by 1 second each time)
-        # > parametrize values in generate_subtask_extraction_reasoning
-        # > in task status change event, add change reason
-        # > close subtask: adds event that is a summary of the new items in the discussion to maintain state continuity
-        # > "The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistatn API."
-        # update recent events limit to 15
-        # implement next action
+        # reasoning generation: term references: make it clear that it's fine to use capitalized concepts (there's an inconsistency right now)
+        # add ability to output followup actions when performing actions
+        # update default recent events limit to 15
+        # (next_action_implementation) > close subtask: adds event that is a summary of the new items in the discussion to maintain state continuity # "The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistatn API."
+        # separate out reasoning generation into its own class
         breakpoint()
         raise NotImplementedError
-        # > when selecting executor, task success is based on similar tasks that executor dealt with before
+        # > blueprint: model parameter # explain that cheaper model costs less but may reduce accuracy
+        # > blueprint: novelty parameter: likelihood of choosing unproven subagent
+        # > blueprint: temperature parameter
+        # > retrieval: add cost as rating factor
+        # > retrieval: when selecting executor, task success is based on similar tasks that executor dealt with before
+        # > mutation: when mutating agent, either update knowledge, or tweak a single parameter
+        # > mutation: when mutating agent, use component optimization of other best agents (that have actual trajectories)
+        # > mutation: new mutation has a provisional rating based on the rating of the agent it was mutated from; but doesn't appear in optimization list until it has a trajectory
 
     def message_from_owner(self, message: str) -> Event:
         """Create a message from the task owner."""
