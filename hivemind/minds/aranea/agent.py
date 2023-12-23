@@ -808,7 +808,7 @@ class OrchestratorInformationSection(Enum):
     SUBTASKS = "SUBTASKS: a list of all subtasks that have been identified by the orchestrator so far; for each one, there is a high-level description of what must be done, as well as the subtask's status. This is not an exhaustive list of all required subtasks for the main task; there may be additional subtasks that are required. This list is automatically maintained and updated by a background process."
     RECENT_EVENTS_LOG = f"{Concept.RECENT_EVENTS_LOG.value}: a log of recent events that have occurred during the execution of the task. This can include status updates for subtasks, messages from the main task owner, and the orchestrator's own previous thoughts/decisions."
     FOCUSED_SUBTASK = f"{Concept.FOCUSED_SUBTASK.value}: the subtask that the orchestrator is currently focused on. This is the subtask that the orchestrator is currently thinking about and making decisions for. The orchestrator can only focus on one subtask at a time, and cannot perform actions on subtasks that it is not currently focused on."
-    FOCUSED_SUBTASK_FULL_DISCUSSION_LOG = f"{Concept.FOCUSED_SUBTASK_DISCUSSION_LOG.value}: a log of the full discussion for the focused subtask between the orchestrator and the subtask executor. The most recent messages are also in the {Concept.RECENT_EVENTS_LOG.value}, but this log contains the full discussion history."
+    FOCUSED_SUBTASK_FULL_DISCUSSION_LOG = f"{Concept.FOCUSED_SUBTASK_DISCUSSION_LOG.value}: a log of the full discussion for the focused subtask between the orchestrator and the subtask executor."
 
 
 @dataclass
@@ -1763,9 +1763,7 @@ class Orchestrator:
         if decision.action_name == ActionName.WAIT.value:
             raise NotImplementedError
 
-        # in task status change event, add change reason
         # ....
-        # > recent events and subtask discussion no longer overlap, so update state text to reflect that
         # subtask identification event: also add task id to event printout
         # > in ActionReasoningNotes.SUBTASK_STATUS_INFO, convert "task" to "subtask"
         # turn printout into configurable parameter for aranea
