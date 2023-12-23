@@ -1838,6 +1838,10 @@ class Orchestrator:
         if decision.action_name == ActionName.PAUSE_SUBTASK_DISCUSSION.value:
             raise NotImplementedError
 
+        # > change task cancellation to task failing validation
+        # > if a task is set to be complete, trigger validation agent automatically
+        # > need to add fail reason for failed tasks
+        # ....
         # (next_action_implementation) > pause subtask discussion: adds event that is a summary of the new items in the discussion to maintain state continuity # "The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistant API."
         raise NotImplementedError
 
@@ -2513,148 +2517,13 @@ class Swarm:
 
 
 # ....
+# main aranea agent: create name "Main Task" for task when initializing task
+# add fake timestamps (advance automatically by 1 second each time)
 # > separate out reasoning generation into its own class
-# > add fake timestamps (advance automatically by 1 second each time)
-# > turn printout into configurable parameter for aranea
-# > blueprint: model parameter # explain that cheaper model costs less but may reduce accuracy
-# > blueprint: novelty parameter: likelihood of choosing unproven subagent
-# > blueprint: temperature parameter
-# > retrieval: add cost as rating factor
-# > retrieval: when selecting executor, task success is based on similar tasks that executor dealt with before
-# > mutation: when mutating agent, either update knowledge, or tweak a single parameter
-# > mutation: when mutating agent, use component optimization of other best agents (that have actual trajectories)
-# > mutation: new mutation has a provisional rating based on the rating of the agent it was mutated from; but doesn't appear in optimization list until it has a trajectory
-# > need to add cancellation reason for cancelled tasks
-# > when subtask extraction fails, update extraction script (perhaps with trajectory of extraction history)
-# > add success record to reasoning processes
-# > main aranea agent: create name "Main Task" for task when initializing task
-# > check that when printing as main task, name is actually being
-# next action execution > placeholder for `wait` action > event log for task also includes agent decisions and thoughts
-# > if a task is set to be complete, trigger validation agent automatically
-# knowledge learning: level of confidence about the knowledge # when updating knowledge, can add, subtract, update, or promote/demote knowledge
-# knowledge learning: must define terms
-# each time agent is rerun, its modified blueprint is saved separately
-
-
-
-
-##########
-
-"""
-{knowledge} # attribute
-{task_specification}
-{subtask_statuses}
-{action_log}
-"""
-"""
-{reasoning} # attribute
-{next_action}
-"""
-"""
-{reasoning}
-{action_context}
-{action_execution}
-"""
-
-
-# Action Process
-# > multistep process
-# > step 1: reasoning
-# > step 2: next action
-# > step 3: action execution
-
-
-# > difference between blueprint id and runtime id
-
-
-# > maybe subagents should bid on task? # maybe offered task, then either accept or decline # check if there is theoretical framework for this
-
-# > new: never started; set by agent on creation
-# > in progress: currently being done by subagent; set after agent decides to start subtask
-# > in validation: currently being validated by validator; set when subagent has reported task completion
-# > completed: done by subagent; set by system when subtask has been validated
-# > cancelled: will not be done; set by agent
-# > blocked: cannot be done by subagent due to some issue; set by subagent
-# > paused: temporarily stopped; set by agent
-# > in discussion: set automatically when someone starts a discussion; ends when the discussion starts decides to end it
-
-
-# > status: stopped, in progress, completed, new, paused, subagent id, subtask id
-# > message type: "information", "stoppage"
-"""
-Event Log Analysis
-Review event log.
-Identify task progress, status of subtasks.
-Detect patterns, anomalies.
-
-Information Gathering Necessity Assessment
-Evaluate if current information sufficient for decision-making.
-If insufficient, assess which aspects require clarification.
-
-Action Identification for Subtask Management
-Check status of each subtask.
-Determine available actions: extract, start, cancel.
-Consider dependencies, impacts of each action.
-"""
-"""
-Communication Needs Evaluation
-Assess necessity of information transfer to/from subagents.
-Identify specific aspects needing communication.
-Evaluate urgency, relevance of communication.
-
-Decision Prioritization
-Prioritize actions based on urgency, importance.
-Consider task deadlines, constraints.
-Balance between information gathering, subtask management, communication.
-
-Outcome Prediction
-Anticipate results of each potential action.
-Consider best and worst-case scenarios.
-
-Action Selection
-Choose action based on analysis, priorities, predictions.
-Ensure alignment with overall task objectives.
-"""
-
-# > gather information
-# > extract/start/stop subtask # depending on status
-# > answer question
-
-# questioner: ask unknowns
-# decider: decide on next action
-# interpreter: give explanations of unknowns
-
-# actions: ask, answer, execute
-
-
-# user_proxy = autogen.UserProxyAgent(
-#    name="User_proxy",
-#    system_message="A human admin.",
-#    code_execution_config={"last_n_messages": 2, "work_dir": "groupchat"},
-#    human_input_mode="TERMINATE",
-#    default_auto_reply="Is there anything else left to do?",
-# )
-# tm = autogen.AssistantAgent(
-#     name="Task_manager",
-#     system_message="Keeps the group on track by reminding everyone of what needs to be done next, repeating instructions/code if necessary. Reply TERMINATE if the original task is done.",
-#     llm_config=llm_config,
-# )
-# coder = autogen.AssistantAgent(
-#     name="Coder",
-#     llm_config=llm_config,
-# )
-# pm = autogen.AssistantAgent(
-#     name="Product_manager",
-#     system_message="Creative in software product ideas.",
-#     llm_config=llm_config,
-# )
-
-# groupchat = autogen.GroupChat(agents=[user_proxy, coder, pm, tm], messages=[], max_round=12)
-# manager = autogen.GroupChatManager(groupchat=groupchat, llm_config=llm_config)
-
-# user_proxy.initiate_chat(manager, message="Find a latest paper about gpt-4 on arxiv and find its potential applications in software.")
-
-# Testing: will need to be converted to Pytest eventually
+# > retrieval > novelty parameter > retrieval: add compute "cost" (actually total amount of time used) > when selecting executor, task success is based on similar tasks that executor dealt with before > maybe subagents should bid on task? # maybe offered task, then either accept or decline # check if there is theoretical framework for this
+# > mutation > update: change mutation to re-generation of each component of agent, including knowledge > blueprint: model parameter # explain that cheaper model costs less but may reduce accuracy > blueprint: novelty parameter: likelihood of choosing unproven subagent > blueprint: temperature parameter > when mutating agent, either update knowledge, or tweak a single parameter > when mutating agent, use component optimization of other best agents (that have actual trajectories) > new mutation has a provisional rating based on the rating of the agent it was mutated from; but doesn't appear in optimization list until it has a trajectory > only mutate when agent fails at some task > add success record to reasoning processes > retrieve previous reasoning for tasks similar to current task
+# MVP
+# turn printout into configurable parameter for aranea
 
 
 class NullTestTaskOwner:
