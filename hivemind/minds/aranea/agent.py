@@ -748,8 +748,16 @@ class ActionDecision:
     def action_args(self) -> dict[str, str]:
         """Arguments of the action chosen."""
         action_args: dict[str, str] = {}
-        if self.action_name == ActionName.MESSAGE_TASK_OWNER.value:
-            action_args["message"] = self.action_choice.split(":")[1].strip().strip('"')
+        if self.action_name in [
+            ActionName.MESSAGE_TASK_OWNER.value,
+            ActionName.MESSAGE_SUBTASK_EXECUTOR.value,
+        ]:
+            action_args["message"] = (
+                self.action_choice.replace(f"{self.action_name}:", "")
+                .strip()
+                .strip('"')
+            )
+            # self.action_choice.split(":")[1].strip().strip('"')
         return action_args
 
     @classmethod
@@ -1658,22 +1666,22 @@ class Orchestrator:
             id_generator=self.id_generator,
         )
 
-    def start_subtask(
-        self, subtask: Task, message_text: str, initial: bool = False
+    def send_subtask_message(
+        self, message_text: str, initial: bool = False
     ) -> list[Event]:
-        """Initiate a subtask."""
-        assert self.focused_subtask is not None
-        message_event = self.subtask_message(self.focused_subtask, message_text)
-        subtask.event_log.add(message_event)
+        """Send a message to the executor for the focused subtask."""
+        assert (focused_subtask := self.focused_subtask) is not None
+        message_event = self.subtask_message(focused_subtask, message_text)
+        focused_subtask.event_log.add(message_event)
         report_status_change = (
-            not initial and subtask.work_status != TaskWorkStatus.IN_PROGRESS
+            not initial and focused_subtask.work_status != TaskWorkStatus.IN_PROGRESS
         )
-        subtask.work_status = TaskWorkStatus.IN_PROGRESS
+        focused_subtask.work_status = TaskWorkStatus.IN_PROGRESS
         status_change_event = Event(
             data=TaskStatusChange(
                 changing_agent=self.id,
-                task_id=subtask.id,
-                old_status=subtask.work_status,
+                task_id=focused_subtask.id,
+                old_status=focused_subtask.work_status,
                 new_status=TaskWorkStatus.IN_PROGRESS,
                 reason=f"Sent message to {Concept.EXECUTOR.value} regarding subtask.",
             ),
@@ -1757,8 +1765,7 @@ class Orchestrator:
         assert subtask.executor is not None, "Task executor assignment failed."
         self.add_subtask(subtask)
         subtask_focus_event = self.focus_subtask(subtask)
-        subtask_initiation_events = self.start_subtask(
-            subtask,
+        subtask_initiation_events = self.send_subtask_message(
             message_text="Hi, please feel free to ask me any questions about the context of this task—I've only given you a brief description to start with, but I can provide more information if you need it.",
             initial=True,
         )
@@ -1788,9 +1795,34 @@ class Orchestrator:
             return self.subtasks.filter_by_status(TaskWorkStatus.IN_PROGRESS)
         raise NotImplementedError
 
+    @property
+    def subtask_action_names(self) -> Set[str]:
+        """Names of actions available in subtask discussion mode."""
+        return {
+            ActionName.MESSAGE_SUBTASK_EXECUTOR.value,
+            ActionName.PAUSE_SUBTASK_DISCUSSION.value,
+            ActionName.MESSAGE_TASK_OWNER.value,
+            ActionName.WAIT.value,
+        }
+
+    @property
+    def action_names(self) -> Set[str]:
+        """Names of actions available to the orchestrator."""
+        if self.focused_subtask:
+            return self.subtask_action_names
+        return self.default_action_names
+
+    def message_subtask_executor(self, message: str) -> ActionResult:
+        """Send message to subtask executor."""
+        return ActionResult(
+            new_events=self.send_subtask_message(message),
+            pause_execution=PauseExecution(False),
+            new_work_status=TaskWorkStatus.IN_PROGRESS,
+        )
+
     def act(self, decision: ActionDecision) -> ActionResult:
         """Act on a decision."""
-        decision.validate_action(valid_actions=self.default_action_names)
+        decision.validate_action(valid_actions=self.action_names)
         if decision.action_name == ActionName.MESSAGE_TASK_OWNER.value:
             return self.message_task_owner(decision.action_args["message"])
         if decision.action_name == ActionName.IDENTIFY_NEW_SUBTASK.value:
@@ -1801,22 +1833,13 @@ class Orchestrator:
             raise NotImplementedError
         if decision.action_name == ActionName.WAIT.value:
             raise NotImplementedError
+        if decision.action_name == ActionName.MESSAGE_SUBTASK_EXECUTOR.value:
+            return self.message_subtask_executor(decision.action_args["message"])
+        if decision.action_name == ActionName.PAUSE_SUBTASK_DISCUSSION.value:
+            raise NotImplementedError
 
-        # (next_action_implementation) > close subtask: adds event that is a summary of the new items in the discussion to maintain state continuity # "The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistant API."
-        # ....
-        # separate out reasoning generation into its own class
-        # > add fake timestamps (advance automatically by 1 second each time)
-        # turn printout into configurable parameter for aranea
-        breakpoint()
+        # (next_action_implementation) > pause subtask discussion: adds event that is a summary of the new items in the discussion to maintain state continuity # "The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistant API."
         raise NotImplementedError
-        # > blueprint: model parameter # explain that cheaper model costs less but may reduce accuracy
-        # > blueprint: novelty parameter: likelihood of choosing unproven subagent
-        # > blueprint: temperature parameter
-        # > retrieval: add cost as rating factor
-        # > retrieval: when selecting executor, task success is based on similar tasks that executor dealt with before
-        # > mutation: when mutating agent, either update knowledge, or tweak a single parameter
-        # > mutation: when mutating agent, use component optimization of other best agents (that have actual trajectories)
-        # > mutation: new mutation has a provisional rating based on the rating of the agent it was mutated from; but doesn't appear in optimization list until it has a trajectory
 
     def message_from_owner(self, message: str) -> Event:
         """Create a message from the task owner."""
@@ -2114,8 +2137,6 @@ class Orchestrator:
                 self.add_to_event_log(action_result.new_events)
             if action_result.new_work_status:
                 self.task.work_status = action_result.new_work_status
-            # if action_result.new_event_status:
-            # self.task.event_status = action_result.new_event_status
             if action_result.pause_execution:
                 break
         if not (last_event := self.task.event_log.last_event):
@@ -2491,23 +2512,30 @@ class Swarm:
         )
 
 
+# ....
+# > separate out reasoning generation into its own class
+# > add fake timestamps (advance automatically by 1 second each time)
+# > turn printout into configurable parameter for aranea
+# > blueprint: model parameter # explain that cheaper model costs less but may reduce accuracy
+# > blueprint: novelty parameter: likelihood of choosing unproven subagent
+# > blueprint: temperature parameter
+# > retrieval: add cost as rating factor
+# > retrieval: when selecting executor, task success is based on similar tasks that executor dealt with before
+# > mutation: when mutating agent, either update knowledge, or tweak a single parameter
+# > mutation: when mutating agent, use component optimization of other best agents (that have actual trajectories)
+# > mutation: new mutation has a provisional rating based on the rating of the agent it was mutated from; but doesn't appear in optimization list until it has a trajectory
 # > need to add cancellation reason for cancelled tasks
 # > when subtask extraction fails, update extraction script (perhaps with trajectory of extraction history)
 # > add success record to reasoning processes
 # > main aranea agent: create name "Main Task" for task when initializing task
 # > check that when printing as main task, name is actually being
 # next action execution > placeholder for `wait` action > event log for task also includes agent decisions and thoughts
-# ....
 # > if a task is set to be complete, trigger validation agent automatically
 # knowledge learning: level of confidence about the knowledge # when updating knowledge, can add, subtract, update, or promote/demote knowledge
 # knowledge learning: must define terms
 # each time agent is rerun, its modified blueprint is saved separately
 
 
-"""
-"discuss_with_agent",
-    "cancel_subtask",
-"""
 
 
 ##########
@@ -2760,8 +2788,8 @@ def test_human_cache_response():
     cache_path.unlink(missing_ok=True)
 
 
-async def test_full() -> None:
-    """Run a full flow on an example task."""
+async def test_orchestrator() -> None:
+    """Run an example task that's likely to make use of all orchestrator actions."""
     with shelve.open(".data/test/aranea_human_reply_cache", writeback=True) as cache:
         human_tester = Human(reply_cache=cache)
         aranea = Swarm(
@@ -2778,6 +2806,11 @@ async def test_full() -> None:
             reply = await result.continue_conversation(human_reply)
 
 
+async def test_base_capability() -> None:
+    """Test base capability."""
+    breakpoint()
+
+
 def test() -> None:
     """Run tests."""
     configure_langchain_cache(Path(".cache"))
@@ -2788,7 +2821,8 @@ def test() -> None:
     # test_default_action_reasoning()
     # test_generate_extraction_reasoning()
     # test_human_cache_response()
-    asyncio.run(test_full())
+    # asyncio.run(test_orchestrator())
+    # asyncio.run(test_base_capability())
 
 
 if __name__ == "__main__":
