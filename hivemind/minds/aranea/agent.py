@@ -239,6 +239,9 @@ class Thought:
     agent_id: RuntimeId
     content: str
 
+    def __str__(self) -> str:
+        return f"{self.agent_id} (Thought): {self.content}"
+
 
 EventData = (
     Message
@@ -730,6 +733,7 @@ class ActionDecision:
 
     action_choice: str
     justifications: str
+    additional_thoughts: str | None = None
 
     @cached_property
     def action_name(self) -> str:
@@ -751,7 +755,11 @@ class ActionDecision:
     @classmethod
     def from_yaml_str(cls, yaml_str: str) -> Self:
         """Create an action decision from a YAML string."""
-        return cls(**default_yaml.load(yaml_str))
+        data = default_yaml.load(yaml_str)
+        if "NONE" in data["additional_thoughts"]:
+            data["additional_thoughts"] = None
+        data["additional_thoughts"] = None # disabled
+        return cls(**data)
 
     def validate_action(self, valid_actions: Iterable[str]) -> None:
         """Validate that the action is allowed."""
@@ -811,6 +819,22 @@ class OrchestratorInformationSection(Enum):
     RECENT_EVENTS_LOG = f"{Concept.RECENT_EVENTS_LOG.value}: a log of recent events that have occurred during the execution of the task. This can include status updates for subtasks, messages from the main task owner, and the orchestrator's own previous thoughts/decisions."
     FOCUSED_SUBTASK = f"{Concept.FOCUSED_SUBTASK.value}: the subtask that the orchestrator is currently focused on. This is the subtask that the orchestrator is currently thinking about and making decisions for. The orchestrator can only focus on one subtask at a time, and cannot perform actions on subtasks that it is not currently focused on."
     FOCUSED_SUBTASK_FULL_DISCUSSION_LOG = f"{Concept.FOCUSED_SUBTASK_DISCUSSION_LOG.value}: a log of the full discussion for the focused subtask between the orchestrator and the subtask executor."
+
+
+@dataclass(frozen=True)
+class SubtaskIdentifcationResult:
+    """Result of subtask identification."""
+
+    identified_subtask: str
+    additional_thoughts: str | None = None
+
+    @classmethod
+    def from_yaml_str(cls, yaml_str: str) -> Self:
+        """Create a subtask identification result from a YAML string."""
+        data = default_yaml.load(yaml_str)
+        if "NONE" in data["additional_thoughts"]:
+            data["additional_thoughts"] = None
+        return cls(**data)
 
 
 @dataclass
@@ -1116,6 +1140,8 @@ class Orchestrator:
           {{justifications}}
         action_choice: |-
           {{action_choice}} # must be one of the actions listed above, in the same format
+        additional_thoughts: |-
+          {{additional_thoughts}} # additional thoughts or comments not captured by the action_choice, OR "NONE"
         ```end_of_action_choice_output
         Any additional comments or thoughts can be added before or after the output blocks.
         """
@@ -1221,7 +1247,7 @@ class Orchestrator:
                 self.generate_default_action_reasoning()
             )
         return self.action_reasoning_template.format(
-            action_choice_core=self.blueprint.reasoning.default_action_choice
+            action_choice_core=self.blueprint.reasoning.default_action_choice,
         )
 
     @property
@@ -1380,9 +1406,8 @@ class Orchestrator:
             self.blueprint.reasoning.subtask_action_choice = (
                 self.generate_subtask_action_reasoning()
             )
-        action_choice_core = self.blueprint.reasoning.subtask_action_choice
         return self.action_reasoning_template.format(
-            action_choice_core=action_choice_core
+            action_choice_core=self.blueprint.reasoning.subtask_action_choice,
         )
 
     @property
@@ -1428,16 +1453,6 @@ class Orchestrator:
         """Send message to main task owner. Main task is blocked until there is a reply."""
         return ActionResult(
             new_events=[
-                # Event(
-                #     data=TaskStatusChange(
-                #         changing_agent=self.id,
-                #         subtask_id=self.task.id,
-                #         old_status=self.task.work_status,
-                #         new_status=TaskWorkStatus.BLOCKED,
-                #     ),
-                #     task_id=self.task.id,
-                #     id_generator=self.id_generator,
-                # ),
                 Event(
                     data=Message(
                         sender=self.id, recipient=self.task.owner_id, content=message
@@ -1525,10 +1540,12 @@ class Orchestrator:
         2. {{step_2_output}}
         3. [... etc.]
         ```end_of_reasoning_output
-        After this block, you must include the subtask you have identified for its executor. To the executor, the identified subtask becomes its own MAIN TASK, and you are the MAIN TASK OWNER of the subtask. The executor knows nothing about the your original MAIN TASK. The subtask must be described in the following format:
+        After this block, you must include the subtask you have identified for its executor. To the executor, the identified subtask becomes its own MAIN TASK, and you are the MAIN TASK OWNER of the subtask. The executor knows nothing about your original MAIN TASK. The subtask must be described in the following format:
         ```start_of_subtask_identification_output
-        subtask_identified: |- # high-level, single-sentence description of the subtask
-          {{subtask_identified}}
+        identified_subtask: |- # high-level, single-sentence description of the subtask
+          {{identified_subtask}}
+        additional_thoughts: |- # additional thoughts or comments not captured by the identified_subtask, OR "NONE"
+          {{additional_thoughts}}
         ```end_of_subtask_identification_output
         Any additional comments or thoughts can be added before or after the output blocks.
         """
@@ -1690,34 +1707,47 @@ class Orchestrator:
             preamble=f"Extracting subtask...\n{as_printable(messages)}",
             color=AGENT_COLOR,
         )
-        extracted_subtask = extract_blocks(
+        extracted_results = extract_blocks(
             new_subtask, "start_of_subtask_identification_output"
         )
-        if not extracted_subtask:
+        if not extracted_results:
             raise ExtractionError(
                 f"Could not extract subtask from the result:\n{new_subtask}"
             )
-        extracted_subtask = str(
-            default_yaml.load(extracted_subtask[-1])["subtask_identified"]
+        extracted_results = SubtaskIdentifcationResult.from_yaml_str(
+            extracted_results[-1]
         )
-        subtask_validation = self.validate_subtask_identification(extracted_subtask)
+        identified_subtask = extracted_results.identified_subtask
         subtask = Task(
-            name=extracted_subtask,
+            name=identified_subtask,
             owner_id=self.id,
             rank_limit=None if self.rank_limit is None else self.rank_limit - 1,
-            description=TaskDescription(information=extracted_subtask),
+            description=TaskDescription(information=identified_subtask),
             validator=self.task.validator,
             id_generator=self.id_generator,
         )
+        subtask_validation = self.validate_subtask_identification(identified_subtask)
         subtask_identification_event = Event(
             data=SubtaskIdentification(
                 owner_id=self.id,
-                subtask=extracted_subtask,
+                subtask=identified_subtask,
                 subtask_id=subtask.id,
                 validation_result=subtask_validation,
             ),
             generating_task_id=self.task.id,
             id_generator=self.id_generator,
+        )
+        additional_thoughts_event = (
+            Event(
+                data=Thought(
+                    agent_id=self.id,
+                    content=extracted_results.additional_thoughts,
+                ),
+                generating_task_id=self.task.id,
+                id_generator=self.id_generator,
+            )
+            if extracted_results.additional_thoughts
+            else None
         )
         if not subtask_validation.valid:
             return ActionResult(
@@ -1728,18 +1758,21 @@ class Orchestrator:
         assert subtask.executor is not None, "Task executor assignment failed."
         self.add_subtask(subtask)
         subtask_focus_event = self.focus_subtask(subtask)
-        subtask_initiation_event = self.start_subtask(
+        subtask_initiation_events = self.start_subtask(
             subtask,
             message_text="Hi, please feel free to ask me any questions about the context of this task—I've only given you a brief description to start with, but I can provide more information if you need it.",
             initial=True,
         )
+        new_events = [
+            subtask_identification_event,
+            additional_thoughts_event,
+            subtask_focus_event,
+            *subtask_initiation_events,
+        ]
+        new_events = [event for event in new_events if event is not None]
         return ActionResult(
             pause_execution=PauseExecution(False),
-            new_events=[
-                subtask_identification_event,
-                subtask_focus_event,
-                *subtask_initiation_event,
-            ],
+            new_events=new_events,
         )
 
     @property
@@ -1771,7 +1804,6 @@ class Orchestrator:
             raise NotImplementedError
 
         # ....
-        # add ability to output followup actions when performing actions
         # (next_action_implementation) > close subtask: adds event that is a summary of the new items in the discussion to maintain state continuity # "The Definition of Done is a Python script that, when run, starts the agent. The agent should be able to have a simple back-and-forth conversation with the user. The agent needs to use the OpenAI Assistant API."
         # separate out reasoning generation into its own class
         # > add fake timestamps (advance automatically by 1 second each time)
@@ -2035,6 +2067,21 @@ class Orchestrator:
             self.update_main_task_description()
             self._new_event_count = 0
 
+    def add_thought(self, thought: str) -> None:
+        """Add a thought to the event log."""
+        self.add_to_event_log(
+            [
+                Event(
+                    data=Thought(
+                        agent_id=self.id,
+                        content=thought,
+                    ),
+                    generating_task_id=self.task.id,
+                    id_generator=self.id_generator,
+                )
+            ]
+        )
+
     async def execute(self, message: str | None = None) -> ExecutorReport:
         """Execute the task. Adds a message (if provided) to the task's event log, and adds own message to the event log at the end of execution."""
         if message is not None:
@@ -2062,6 +2109,8 @@ class Orchestrator:
                 executor_events.sort(key=lambda event: event.timestamp)
                 self.add_to_event_log(executor_events)
             action_decision = self.choose_action()
+            if action_decision.additional_thoughts:
+                self.add_thought(action_decision.additional_thoughts)
             action_result = self.act(action_decision)
             if action_result.new_events:
                 self.add_to_event_log(action_result.new_events)
