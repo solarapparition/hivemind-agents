@@ -670,6 +670,7 @@ class ActionName(Enum):
     WAIT = "WAIT"
     MESSAGE_SUBTASK_EXECUTOR = "MESSAGE_SUBTASK_EXECUTOR"
     PAUSE_SUBTASK_DISCUSSION = "PAUSE_SUBTASK_DISCUSSION"
+    CANCEL_SUBTASK = "CANCEL_SUBTASK"
 
 
 ORCHESTRATOR_CONCEPTS = f"""
@@ -1324,17 +1325,22 @@ class Orchestrator:
     def subtask_mode_actions(self) -> str:
         """Actions available in subtask discussion mode."""
         actions = """
-        - `{MESSAGE_TASK_OWNER}: "{{message}}"`: send a message to the MAIN TASK OWNER to gather or clarify information about the MAIN TASK. `{{message}}` must be replaced with the message you want to send.
-        - `{MESSAGE_SUBTASK_EXECUTOR}: "{{message}}"`: send a message to the EXECUTOR of the FOCUSED SUBTASK to gather or clarify information about the SUBTASK. {{message}} must be replaced with the message you want to send. _Note_: the EXECUTOR is only aware of its own FOCUSED SUBTASK, not _your_ MAIN TASK. From its perspective, the FOCUSED SUBTASK is _its_ MAIN TASK.
-        - `{PAUSE_SUBTASK_DISCUSSION}: "{{reason}}"`: pause the discussion of the FOCUSED SUBTASK to either communicate with other subtask executors, the MAIN TASK OWNER, or to create a new subtask. The FOCUSED SUBTASK's discussion will be frozen, but can be resumed later. {{reason}} must be replaced with the reason for pausing the discussion, so that the orchestrator can remember why it paused the discussion when it resumes it later.
-        - `{CANCEL_SUBTASK}: "{{reason}}"`: cancel the FOCUSED SUBTASK for the given reason. {{reason}} must be replaced with the reason for cancelling the subtask.
-        - `{WAIT}`: do nothing until the next event from the FOCUSED SUBTASK.
+        - `{MESSAGE_TASK_OWNER}: "{{message}}"`: send a message to the {MAIN_TASK_OWNER} to gather or clarify information about the MAIN TASK. `{{message}}` must be replaced with the message you want to send.
+        - `{MESSAGE_SUBTASK_EXECUTOR}: "{{message}}"`: send a message to the {EXECUTOR} of the {FOCUSED_SUBTASK} to gather or clarify information about the {FOCUSED_SUBTASK}. {{message}} must be replaced with the message you want to send. _Note_: the {EXECUTOR} is only aware of its own {FOCUSED_SUBTASK}, not _your_ {MAIN_TASK}. From its perspective, the {FOCUSED_SUBTASK} is _its_ {MAIN_TASK}.
+        - `{PAUSE_SUBTASK_DISCUSSION}: "{{reason}}"`: pause the discussion of the {FOCUSED_SUBTASK} to either communicate with other subtask executors, the {MAIN_TASK_OWNER}, or to create a new subtask. The {FOCUSED_SUBTASK}'s discussion will be frozen, but can be resumed later. {{reason}} must be replaced with the reason for pausing the discussion, so that the orchestrator can remember why it paused the discussion when it resumes it later.
+        - `{CANCEL_SUBTASK}: "{{reason}}"`: cancel the {FOCUSED_SUBTASK} for the given reason. {{reason}} must be replaced with the reason for cancelling the subtask.
+        - `{WAIT}`: do nothing until the next event from the {FOCUSED_SUBTASK}.
         """
         return dedent_and_strip(actions).format(
+            MAIN_TASK_OWNER=Concept.MAIN_TASK_OWNER.value,
+            MAIN_TASK=Concept.MAIN_TASK.value,
+            EXECUTOR=Concept.EXECUTOR.value,
+            FOCUSED_SUBTASK=Concept.FOCUSED_SUBTASK.value,
             MESSAGE_SUBTASK_EXECUTOR=ActionName.MESSAGE_SUBTASK_EXECUTOR.value,
             MESSAGE_TASK_OWNER=ActionName.MESSAGE_TASK_OWNER.value,
-            WAIT=ActionName.WAIT.value,
             PAUSE_SUBTASK_DISCUSSION=ActionName.PAUSE_SUBTASK_DISCUSSION.value,
+            CANCEL_SUBTASK=ActionName.CANCEL_SUBTASK.value,
+            WAIT=ActionName.WAIT.value,
         )
 
     @property
