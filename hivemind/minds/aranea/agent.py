@@ -2466,9 +2466,18 @@ class Delegator:
         # TODO: basic browser task case
 
 
-def default_bot_base_capabilities() -> list["BaseCapability"]:
-    """Default base capabilities for bots."""
-    return []
+def default_base_capabilities() -> list[BaseCapability]:
+    """Default base capabilities."""
+
+
+
+    # > need to think through how conversion between base capability and bot works
+    # ....
+
+
+
+
+    breakpoint()
 
 
 @dataclass
@@ -2478,7 +2487,7 @@ class Swarm:
     files_dir: Path = Path(".data/aranea")
     """Directory for files related to the agent and any subagents."""
     base_capabilities: Sequence[BaseCapability] = field(
-        default_factory=default_bot_base_capabilities
+        default_factory=default_base_capabilities
     )
     """Base automated capabilities of the agent."""
     base_capability_advisor: Advisor = field(
@@ -2558,10 +2567,9 @@ class Swarm:
         )
 
 
-# separate out reasoning generation into its own class
+# create list of base capabilities
 # ....
-# > simple base-capability task
-# > base capability listing/placeholders
+# base capability scaffolding development
 # > serialization > only populate knowledge on save if it’s empty
 # retrieval > novelty parameter > retrieval: add compute "cost" (actually total amount of time used) > when selecting executor, task success is based on similar tasks that executor dealt with before > maybe subagents should bid on task? # maybe offered task, then either accept or decline # check if there is theoretical framework for this
 # mutation > update: unify mutation with generation: mutation is same as re-generating each component of agent, including knowledge > blueprint: model parameter # explain that cheaper model costs less but may reduce accuracy > blueprint: novelty parameter: likelihood of choosing unproven subagent > blueprint: temperature parameter > when mutating agent, either update knowledge, or tweak a single parameter > when mutating agent, use component optimization of other best agents (that have actual trajectories) > new mutation has a provisional rating based on the rating of the agent it was mutated from; but doesn't appear in optimization list until it has a trajectory > only mutate when agent fails at some task > add success record to reasoning processes > retrieve previous reasoning for tasks similar to current task
@@ -2700,8 +2708,8 @@ def test_human_cache_response():
     cache_path.unlink(missing_ok=True)
 
 
-async def test_orchestrator() -> None:
-    """Run an example task that's likely to make use of all orchestrator actions."""
+async def run_test_task(task: str, base_capabilities: Sequence[BaseCapability]) -> None:
+    """Run a test task."""
     with shelve.open(".data/test/aranea_human_reply_cache", writeback=True) as cache:
         human_tester = Human(reply_cache=cache)
         aranea = Swarm(
@@ -2711,17 +2719,21 @@ async def test_orchestrator() -> None:
             id_generator=DefaultIdGenerator(
                 namespace=UUID("6bcf7dd4-8e29-58f6-bf5f-7566d4108df4"), seed="test"
             ),
+            base_capabilities=base_capabilities,
         )
-        task = "Create an OpenAI assistant agent."
         reply = (result := await aranea.run(task)).content
         while human_reply := human_tester.advise(reply):
             reply = await result.continue_conversation(human_reply)
 
+async def test_orchestrator() -> None:
+    """Run an example task that's likely to make use of all orchestrator actions."""
+    task = "Create an OpenAI assistant agent."
+    await run_test_task(task, base_capabilities=[])
 
 async def test_base_capability() -> None:
-    """Test base capability."""
-    # add fake timestamps (advance deterministically by 1 second each time)
-    breakpoint()
+    """Run an example task that tests base capabilities."""
+    task = "Create a mock timestamp generator that advances by 1 second each time it is called."
+    await run_test_task(task, base_capabilities=default_base_capabilities())
 
 
 def test() -> None:
@@ -2734,8 +2746,8 @@ def test() -> None:
     # test_default_action_reasoning()
     # test_generate_extraction_reasoning()
     # test_human_cache_response()
-    asyncio.run(test_orchestrator())
-    # asyncio.run(test_base_capability())
+    # asyncio.run(test_orchestrator())
+    asyncio.run(test_base_capability())
 
 
 if __name__ == "__main__":
