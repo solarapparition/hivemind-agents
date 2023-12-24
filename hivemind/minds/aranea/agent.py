@@ -1324,9 +1324,10 @@ class Orchestrator:
     def subtask_mode_actions(self) -> str:
         """Actions available in subtask discussion mode."""
         actions = """
-        - `{MESSAGE_SUBTASK_EXECUTOR}: "{{message}}"`: send a message to the EXECUTOR of the FOCUSED SUBTASK to gather or clarify information about the SUBTASK. {{message}} must be replaced with the message you want to send. _Note_: the EXECUTOR is only aware of its own FOCUSED SUBTASK, not _your_ MAIN TASK. From its perspective, the FOCUSED SUBTASK is _its_ MAIN TASK.
         - `{MESSAGE_TASK_OWNER}: "{{message}}"`: send a message to the MAIN TASK OWNER to gather or clarify information about the MAIN TASK. `{{message}}` must be replaced with the message you want to send.
+        - `{MESSAGE_SUBTASK_EXECUTOR}: "{{message}}"`: send a message to the EXECUTOR of the FOCUSED SUBTASK to gather or clarify information about the SUBTASK. {{message}} must be replaced with the message you want to send. _Note_: the EXECUTOR is only aware of its own FOCUSED SUBTASK, not _your_ MAIN TASK. From its perspective, the FOCUSED SUBTASK is _its_ MAIN TASK.
         - `{PAUSE_SUBTASK_DISCUSSION}: "{{reason}}"`: pause the discussion of the FOCUSED SUBTASK to either communicate with other subtask executors, the MAIN TASK OWNER, or to create a new subtask. The FOCUSED SUBTASK's discussion will be frozen, but can be resumed later. {{reason}} must be replaced with the reason for pausing the discussion, so that the orchestrator can remember why it paused the discussion when it resumes it later.
+        - `{CANCEL_SUBTASK}: "{{reason}}"`: cancel the FOCUSED SUBTASK for the given reason. {{reason}} must be replaced with the reason for cancelling the subtask.
         - `{WAIT}`: do nothing until the next event from the FOCUSED SUBTASK.
         """
         return dedent_and_strip(actions).format(
@@ -1603,10 +1604,6 @@ class Orchestrator:
         {blocked_subtasks}
         ```end_of_blocked_subtasks
         """
-        # ### SUBTASKS (NEW):
-        # ```start_of_new_subtasks
-        # {new_subtasks}
-        # ```end_of_new_subtasks
 
         completed_subtasks = str(
             self.subtasks.filter_by_status(TaskWorkStatus.COMPLETED)
@@ -2516,12 +2513,13 @@ class Swarm:
         )
 
 
+# separate out reasoning generation into its own class
 # ....
-# main aranea agent: create name "Main Task" for task when initializing task
-# add fake timestamps (advance automatically by 1 second each time)
-# > separate out reasoning generation into its own class
-# > retrieval > novelty parameter > retrieval: add compute "cost" (actually total amount of time used) > when selecting executor, task success is based on similar tasks that executor dealt with before > maybe subagents should bid on task? # maybe offered task, then either accept or decline # check if there is theoretical framework for this
-# > mutation > update: change mutation to re-generation of each component of agent, including knowledge > blueprint: model parameter # explain that cheaper model costs less but may reduce accuracy > blueprint: novelty parameter: likelihood of choosing unproven subagent > blueprint: temperature parameter > when mutating agent, either update knowledge, or tweak a single parameter > when mutating agent, use component optimization of other best agents (that have actual trajectories) > new mutation has a provisional rating based on the rating of the agent it was mutated from; but doesn't appear in optimization list until it has a trajectory > only mutate when agent fails at some task > add success record to reasoning processes > retrieve previous reasoning for tasks similar to current task
+# > simple base-capability task
+# > base capability listing/placeholders
+# > serialization > only populate knowledge on save if it’s empty
+# retrieval > novelty parameter > retrieval: add compute "cost" (actually total amount of time used) > when selecting executor, task success is based on similar tasks that executor dealt with before > maybe subagents should bid on task? # maybe offered task, then either accept or decline # check if there is theoretical framework for this
+# mutation > update: unify mutation with generation: mutation is same as re-generating each component of agent, including knowledge > blueprint: model parameter # explain that cheaper model costs less but may reduce accuracy > blueprint: novelty parameter: likelihood of choosing unproven subagent > blueprint: temperature parameter > when mutating agent, either update knowledge, or tweak a single parameter > when mutating agent, use component optimization of other best agents (that have actual trajectories) > new mutation has a provisional rating based on the rating of the agent it was mutated from; but doesn't appear in optimization list until it has a trajectory > only mutate when agent fails at some task > add success record to reasoning processes > retrieve previous reasoning for tasks similar to current task
 # MVP
 # turn printout into configurable parameter for aranea
 
@@ -2677,6 +2675,7 @@ async def test_orchestrator() -> None:
 
 async def test_base_capability() -> None:
     """Test base capability."""
+    # add fake timestamps (advance deterministically by 1 second each time)
     breakpoint()
 
 
