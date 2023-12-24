@@ -850,6 +850,214 @@ class SubtaskIdentifcationResult:
 
 
 @dataclass
+class ReasoningGenerator:
+    """Generates reasoning for an orchestrator."""
+
+    orchestrator: "Orchestrator"
+
+    @property
+    def base_info(self) -> str:
+        """Base information for the orchestrator."""
+        return self.orchestrator.base_info
+
+    @property
+    def default_mode_actions(self) -> str:
+        """Actions available to the orchestrator in the default state."""
+        return self.orchestrator.default_mode_actions
+
+    @property
+    def role(self) -> Role:
+        """Role of the orchestrator."""
+        return self.orchestrator.role
+
+    @property
+    def subtask_mode_actions(self) -> str:
+        """Actions available to the orchestrator in the subtask discussion state."""
+        return self.orchestrator.subtask_mode_actions
+
+    def generate_default_action_reasoning(self) -> str:
+        """Generate reasoning for choosing an action in the default state."""
+        context = """
+        ## MISSION:
+        {mission}
+
+        {base_info}
+
+        ## {ORCHESTRATOR_ACTIONS}:
+        In its default state, the orchestrator can perform the following actions:
+        {actions}
+        """
+        request = f"""
+        ## REQUEST FOR YOU:
+        {OrchestratorReasoningNotes.OVERVIEW.value}
+        - {OrchestratorReasoningNotes.ACTION_RESTRICTIONS.value}
+        - {OrchestratorReasoningNotes.INFORMATION_RESTRICTIONS.value}
+        - {OrchestratorReasoningNotes.TERM_REFERENCES.value}
+        - {OrchestratorReasoningNotes.SUBTASK_STATUS_INFO.value}
+        - {OrchestratorReasoningNotes.STEPS_RESTRICTIONS.value}
+        - {OrchestratorReasoningNotes.PROCEDURAL_SCRIPTING.value}
+
+        {{output_instructions}}
+        """
+        messages = [
+            SystemMessage(
+                content=dedent_and_strip(context).format(
+                    mission=ORCHESTRATOR_INSTRUCTOR_MISSION,
+                    base_info=self.base_info,
+                    ORCHESTRATOR_ACTIONS=Concept.ORCHESTRATOR_ACTIONS.value,
+                    actions=self.default_mode_actions,
+                )
+            ),
+            SystemMessage(
+                content=dedent_and_strip(request).format(
+                    output_instructions=REASONING_OUTPUT_INSTRUCTIONS,
+                )
+            ),
+        ]
+        return query_and_extract_reasoning(
+            messages,
+            preamble=f"Generating reasoning for {self.role.value} in {ActionModeName.DEFAULT.value} state...\n{as_printable(messages)}",
+            printout=VERBOSE,
+        )
+
+    def generate_subtask_action_reasoning(self) -> str:
+        """Generate reasoning for choosing an action in the subtask discussion state."""
+        context = """
+        ## MISSION:
+        {mission}
+
+        {base_info}
+
+        ## {ORCHESTRATOR_ACTIONS}:
+        The orchestrator is currently in a mode where it is discussing its FOCUSED SUBTASK with the SUBTASK EXECUTOR. Currently, the orchestrator can perform the following actions:
+        {actions}
+        """
+
+        request = f"""
+        ## REQUEST FOR YOU:
+        {OrchestratorReasoningNotes.OVERVIEW.value}
+        - {OrchestratorReasoningNotes.ACTION_RESTRICTIONS.value}
+        - {OrchestratorReasoningNotes.INFORMATION_RESTRICTIONS.value}
+        - {OrchestratorReasoningNotes.TERM_REFERENCES.value}
+        - {OrchestratorReasoningNotes.SUBTASK_STATUS_INFO.value}
+        - {OrchestratorReasoningNotes.FOCUSED_SUBTASK_RESTRICTIONS.value}
+        - {OrchestratorReasoningNotes.STEPS_RESTRICTIONS.value}
+        - {OrchestratorReasoningNotes.PROCEDURAL_SCRIPTING.value}
+        
+        {{output_instructions}}
+        """
+        messages = [
+            SystemMessage(
+                content=dedent_and_strip(context).format(
+                    mission=ORCHESTRATOR_INSTRUCTOR_MISSION,
+                    base_info=self.base_info,
+                    ORCHESTRATOR_ACTIONS=Concept.ORCHESTRATOR_ACTIONS.value,
+                    actions=self.subtask_mode_actions,
+                )
+            ),
+            SystemMessage(
+                content=dedent_and_strip(request).format(
+                    output_instructions=REASONING_OUTPUT_INSTRUCTIONS,
+                )
+            ),
+        ]
+        return query_and_extract_reasoning(
+            messages,
+            preamble=f"Generating reasoning for {self.role.value} in {ActionModeName.DEFAULT.value} state...\n{as_printable(messages)}",
+            printout=VERBOSE,
+        )
+
+    def generate_subtask_identification_reasoning(self) -> str:
+        """Generate reasoning for identifying a new subtask."""
+        context = """
+        ## MISSION:
+        You are the instructor for an AI task orchestration agent. Your purpose is to provide step-by-step guidance for the agent to think through how to identify the next subtask from the main task description.
+
+        {base_info}
+
+        ## MODULAR SUBTASK INDENTIFICATION PHILOSOPHY:
+        {msi}
+
+        """
+        request = f"""
+        ## REQUEST FOR YOU:
+        Provide a step-by-step, robust reasoning process for the orchestrator to a) understand what MSI is and follow its principles, and b) sequentially process the information in the information sections it has access to so that it can identify a new subtask that is not yet identified. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind before they perform subtask identification. Some things to note:
+        - {OrchestratorReasoningNotes.INFORMATION_RESTRICTIONS.value}
+        - {OrchestratorReasoningNotes.TERM_REFERENCES.value}
+        - In its current state, the orchestrator is not able to perform any other actions besides subtask identification and the reasoning preceeding it.
+        - {OrchestratorReasoningNotes.STEPS_RESTRICTIONS.value}
+        - {OrchestratorReasoningNotes.PROCEDURAL_SCRIPTING.value}
+        - The orchestrator should only perform the subtask identification on the _last_ step, after it has considered _all_ the information it needs. No other actions need to be performed after subtask identification.
+        {{output_instructions}}
+        """
+        messages = [
+            SystemMessage(
+                content=dedent_and_strip(context).format(
+                    base_info=self.base_info,
+                    msi=MODULAR_SUBTASK_IDENTIFICATION,
+                )
+            ),
+            SystemMessage(
+                content=dedent_and_strip(request).format(
+                    output_instructions=REASONING_OUTPUT_INSTRUCTIONS
+                )
+            ),
+        ]
+        return query_and_extract_reasoning(
+            messages,
+            preamble=f"Generating subtask extraction reasoning...\n{as_printable(messages)}",
+            printout=VERBOSE,
+        )
+
+    @staticmethod
+    def generate_main_task_update_reasoning(printout: bool = True) -> str:
+        """Generate reasoning for updating the main task. Currently unused."""
+        context = f"""
+        ## MISSION:
+        You are the instructor for an AI task orchestration agent. Your purpose is to provide step-by-step guidance for the agent to think through how to update the main task description based on new information in an event log.
+
+        ## CONCEPTS:
+        These are the concepts you should be familiar with:
+        - {Concept.ORCHESTRATOR.value}: the agent that is responsible for managing the execution of a main task while communicating with the {Concept.MAIN_TASK_OWNER.value} to gather required information for the task.
+        - {Concept.MAIN_TASK_OWNER.value}: the agent that owns the main task and is responsible for providing information to the orchestrator to help it execute the main task.
+        - {Concept.MAIN_TASK.value}: the task that the orchestrator is responsible for executing.
+
+        ## {Concept.ORCHESTRATOR_INFORMATION_SECTIONS.value}:
+        The orchestrator has access to the following information:
+        - {Concept.MAIN_TASK_DEFINITION_OF_DONE.value}: a description of the criteria that must be met for the {Concept.MAIN_TASK.value} to be considered complete.
+        - {Concept.MAIN_TASK_INFORMATION.value}: information on what the {Concept.MAIN_TASK.value} is about, including the goal of the task and any relevant background information. This section provides details that may be too granular for the {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} section.
+        - {Concept.TASK_MESSAGES.value}: a transcript of the messages between the orchestrator and the {Concept.MAIN_TASK_OWNER.value}.
+        - {Concept.LAST_READ_MAIN_TASK_OWNER_MESSAGE.value}: the last message in the {Concept.TASK_MESSAGES.value} section sent by the {Concept.MAIN_TASK_OWNER.value} that has been read by the orchestrator. All messages after this message have not been read by the orchestrator yet.
+        """
+
+        task = f"""
+        ## REQUEST FOR YOU:
+        Provide a step-by-step, robust reasoning process for the orchestrator to sequentially think through the information it has access to so that it has the appropriate mental context for updating the {Concept.MAIN_TASK_INFORMATION.value} and {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} sections to reflect the new information in the {Concept.TASK_MESSAGES.value} that comes after {Concept.LAST_READ_MAIN_TASK_OWNER_MESSAGE.value}. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind. Some things to note:
+        - This reasoning process does not make the actual updates to the {Concept.MAIN_TASK_INFORMATION.value} and {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} sections; it only figures out what updates are needed.
+        - Both the {Concept.MAIN_TASK_INFORMATION} and {Concept.MAIN_TASK_DEFINITION_OF_DONE} sections may be outdated, hence the need to update them with the latest messages from the {Concept.MAIN_TASK_OWNER.value}.
+        - {OrchestratorReasoningNotes.INFORMATION_RESTRICTIONS.value}
+        - The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "{Concept.MAIN_TASK.value}" or "{Concept.TASK_MESSAGES.value} section"); however, don't use capitalization as emphasis for any other terms.
+        - {OrchestratorReasoningNotes.STEPS_RESTRICTIONS.value}
+        - {OrchestratorReasoningNotes.PROCEDURAL_SCRIPTING.value}
+
+        {{output_instructions}}
+        """
+        messages = [
+            SystemMessage(content=dedent_and_strip(context)),
+            SystemMessage(
+                content=dedent_and_strip(task).format(
+                    output_instructions=REASONING_OUTPUT_INSTRUCTIONS
+                )
+            ),
+        ]
+        return query_and_extract_reasoning(
+            messages,
+            preamble=f"Generating reasoning for updating the main task...\n{as_printable(messages)}",
+            printout=printout,
+        )
+
+
+@dataclass
 class Orchestrator:
     """A recursively auto-specializing Aranea subagent."""
 
@@ -987,11 +1195,6 @@ class Orchestrator:
         {{blocked_subtasks}}
         ```end_of_blocked_subtasks
         """
-        # ### SUBTASKS ({TaskWorkStatus.IDENTIFIED.value}):
-        # These subtasks are newly identified and not yet begun.
-        # ```start_of_identified_subtasks
-        # {{identified_subtasks}}
-        # ```end_of_identified_subtasks
         return dedent_and_strip(template)
 
     @property
@@ -1204,50 +1407,14 @@ class Orchestrator:
             orchestrator_information_sections=self.info_sections,
         )
 
+    @property
+    def reasoning_generator(self) -> ReasoningGenerator:
+        """Reasoning generator for the orchestrator."""
+        return ReasoningGenerator(orchestrator=self)
+
     def generate_default_action_reasoning(self) -> str:
         """Generate reasoning for choosing an action in the default state."""
-        context = """
-        ## MISSION:
-        {mission}
-
-        {base_info}
-
-        ## {ORCHESTRATOR_ACTIONS}:
-        In its default state, the orchestrator can perform the following actions:
-        {actions}
-        """
-        request = f"""
-        ## REQUEST FOR YOU:
-        {OrchestratorReasoningNotes.OVERVIEW.value}
-        - {OrchestratorReasoningNotes.ACTION_RESTRICTIONS.value}
-        - {OrchestratorReasoningNotes.INFORMATION_RESTRICTIONS.value}
-        - {OrchestratorReasoningNotes.TERM_REFERENCES.value}
-        - {OrchestratorReasoningNotes.SUBTASK_STATUS_INFO.value}
-        - {OrchestratorReasoningNotes.STEPS_RESTRICTIONS.value}
-        - {OrchestratorReasoningNotes.PROCEDURAL_SCRIPTING.value}
-
-        {{output_instructions}}
-        """
-        messages = [
-            SystemMessage(
-                content=dedent_and_strip(context).format(
-                    mission=ORCHESTRATOR_INSTRUCTOR_MISSION,
-                    base_info=self.base_info,
-                    ORCHESTRATOR_ACTIONS=Concept.ORCHESTRATOR_ACTIONS.value,
-                    actions=self.default_mode_actions,
-                )
-            ),
-            SystemMessage(
-                content=dedent_and_strip(request).format(
-                    output_instructions=REASONING_OUTPUT_INSTRUCTIONS,
-                )
-            ),
-        ]
-        return query_and_extract_reasoning(
-            messages,
-            preamble=f"Generating reasoning for {self.role.value} in {ActionModeName.DEFAULT.value} state...\n{as_printable(messages)}",
-            printout=VERBOSE,
-        )
+        return self.reasoning_generator.generate_default_action_reasoning()
 
     @property
     def default_action_reasoning(self) -> str:
@@ -1370,50 +1537,7 @@ class Orchestrator:
 
     def generate_subtask_action_reasoning(self) -> str:
         """Generate reasoning for choosing an action in subtask discussion mode."""
-        context = """
-        ## MISSION:
-        {mission}
-
-        {base_info}
-
-        ## {ORCHESTRATOR_ACTIONS}:
-        The orchestrator is currently in a mode where it is discussing its FOCUSED SUBTASK with the SUBTASK EXECUTOR. Currently, the orchestrator can perform the following actions:
-        {actions}
-        """
-
-        request = f"""
-        ## REQUEST FOR YOU:
-        {OrchestratorReasoningNotes.OVERVIEW.value}
-        - {OrchestratorReasoningNotes.ACTION_RESTRICTIONS.value}
-        - {OrchestratorReasoningNotes.INFORMATION_RESTRICTIONS.value}
-        - {OrchestratorReasoningNotes.TERM_REFERENCES.value}
-        - {OrchestratorReasoningNotes.SUBTASK_STATUS_INFO.value}
-        - {OrchestratorReasoningNotes.FOCUSED_SUBTASK_RESTRICTIONS.value}
-        - {OrchestratorReasoningNotes.STEPS_RESTRICTIONS.value}
-        - {OrchestratorReasoningNotes.PROCEDURAL_SCRIPTING.value}
-        
-        {{output_instructions}}
-        """
-        messages = [
-            SystemMessage(
-                content=dedent_and_strip(context).format(
-                    mission=ORCHESTRATOR_INSTRUCTOR_MISSION,
-                    base_info=self.base_info,
-                    ORCHESTRATOR_ACTIONS=Concept.ORCHESTRATOR_ACTIONS.value,
-                    actions=self.subtask_mode_actions,
-                )
-            ),
-            SystemMessage(
-                content=dedent_and_strip(request).format(
-                    output_instructions=REASONING_OUTPUT_INSTRUCTIONS,
-                )
-            ),
-        ]
-        return query_and_extract_reasoning(
-            messages,
-            preamble=f"Generating reasoning for {self.role.value} in {ActionModeName.DEFAULT.value} state...\n{as_printable(messages)}",
-            printout=VERBOSE,
-        )
+        return self.reasoning_generator.generate_subtask_action_reasoning()
 
     @property
     def subtask_action_reasoning(self) -> str:
@@ -1495,54 +1619,16 @@ class Orchestrator:
             msi=MODULAR_SUBTASK_IDENTIFICATION,
         )
 
-    def generate_subtask_extraction_reasoning(self, printout: bool = False) -> str:
+    def generate_subtask_identification_reasoning(self) -> str:
         """Generate reasoning for extracting a subtask."""
-        context = """
-        ## MISSION:
-        You are the instructor for an AI task orchestration agent. Your purpose is to provide step-by-step guidance for the agent to think through how to identify the next subtask from the main task description.
-
-        {base_info}
-
-        ## MODULAR SUBTASK INDENTIFICATION PHILOSOPHY:
-        {msi}
-
-        """
-        request = f"""
-        ## REQUEST FOR YOU:
-        Provide a step-by-step, robust reasoning process for the orchestrator to a) understand what MSI is and follow its principles, and b) sequentially process the information in the information sections it has access to so that it can identify a new subtask that is not yet identified. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind before they perform subtask identification. Some things to note:
-        - {OrchestratorReasoningNotes.INFORMATION_RESTRICTIONS.value}
-        - {OrchestratorReasoningNotes.TERM_REFERENCES.value}
-        - In its current state, the orchestrator is not able to perform any other actions besides subtask identification and the reasoning preceeding it.
-        - {OrchestratorReasoningNotes.STEPS_RESTRICTIONS.value}
-        - {OrchestratorReasoningNotes.PROCEDURAL_SCRIPTING.value}
-        - The orchestrator should only perform the subtask identification on the _last_ step, after it has considered _all_ the information it needs. No other actions need to be performed after subtask identification.
-        {{output_instructions}}
-        """
-        messages = [
-            SystemMessage(
-                content=dedent_and_strip(context).format(
-                    base_info=self.base_info,
-                    msi=MODULAR_SUBTASK_IDENTIFICATION,
-                )
-            ),
-            SystemMessage(
-                content=dedent_and_strip(request).format(
-                    output_instructions=REASONING_OUTPUT_INSTRUCTIONS
-                )
-            ),
-        ]
-        return query_and_extract_reasoning(
-            messages,
-            preamble=f"Generating subtask extraction reasoning...\n{as_printable(messages)}",
-            printout=printout,
-        )
+        return self.reasoning_generator.generate_subtask_identification_reasoning()
 
     @property
     def subtask_extraction_reasoning(self) -> str:
         """Prompt for extracting a subtask."""
         if not self.blueprint.reasoning.subtask_extraction:
             self.blueprint.reasoning.subtask_extraction = (
-                self.generate_subtask_extraction_reasoning(printout=VERBOSE)
+                self.generate_subtask_identification_reasoning()
             )
         template = """
         Use the following reasoning process to decide what to do next:
@@ -1873,53 +1959,6 @@ class Orchestrator:
         )
 
     _new_event_count = 0
-
-    @staticmethod
-    def generate_main_task_update_reasoning(printout: bool = True) -> str:
-        """Generate reasoning for updating the main task."""
-        context = f"""
-        ## MISSION:
-        You are the instructor for an AI task orchestration agent. Your purpose is to provide step-by-step guidance for the agent to think through how to update the main task description based on new information in an event log.
-
-        ## CONCEPTS:
-        These are the concepts you should be familiar with:
-        - {Concept.ORCHESTRATOR.value}: the agent that is responsible for managing the execution of a main task while communicating with the {Concept.MAIN_TASK_OWNER.value} to gather required information for the task.
-        - {Concept.MAIN_TASK_OWNER.value}: the agent that owns the main task and is responsible for providing information to the orchestrator to help it execute the main task.
-        - {Concept.MAIN_TASK.value}: the task that the orchestrator is responsible for executing.
-
-        ## {Concept.ORCHESTRATOR_INFORMATION_SECTIONS.value}:
-        The orchestrator has access to the following information:
-        - {Concept.MAIN_TASK_DEFINITION_OF_DONE.value}: a description of the criteria that must be met for the {Concept.MAIN_TASK.value} to be considered complete.
-        - {Concept.MAIN_TASK_INFORMATION.value}: information on what the {Concept.MAIN_TASK.value} is about, including the goal of the task and any relevant background information. This section provides details that may be too granular for the {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} section.
-        - {Concept.TASK_MESSAGES.value}: a transcript of the messages between the orchestrator and the {Concept.MAIN_TASK_OWNER.value}.
-        - {Concept.LAST_READ_MAIN_TASK_OWNER_MESSAGE.value}: the last message in the {Concept.TASK_MESSAGES.value} section sent by the {Concept.MAIN_TASK_OWNER.value} that has been read by the orchestrator. All messages after this message have not been read by the orchestrator yet.
-        """
-
-        task = f"""
-        ## REQUEST FOR YOU:
-        Provide a step-by-step, robust reasoning process for the orchestrator to sequentially think through the information it has access to so that it has the appropriate mental context for updating the {Concept.MAIN_TASK_INFORMATION.value} and {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} sections to reflect the new information in the {Concept.TASK_MESSAGES.value} that comes after {Concept.LAST_READ_MAIN_TASK_OWNER_MESSAGE.value}. These steps provide the internal thinking that an intelligent agent must go through so that they have all the relevant information on top of mind. Some things to note:
-        - This reasoning process does not make the actual updates to the {Concept.MAIN_TASK_INFORMATION.value} and {Concept.MAIN_TASK_DEFINITION_OF_DONE.value} sections; it only figures out what updates are needed.
-        - Both the {Concept.MAIN_TASK_INFORMATION} and {Concept.MAIN_TASK_DEFINITION_OF_DONE} sections may be outdated, hence the need to update them with the latest messages from the {Concept.MAIN_TASK_OWNER.value}.
-        - {OrchestratorReasoningNotes.INFORMATION_RESTRICTIONS.value}
-        - The orchestrator requires precise references to information it's been given, and it may need a reminder to check for specific parts; it's best to be explicit and use the _exact_ capitalized terminology to refer to concepts or information sections (e.g. "{Concept.MAIN_TASK.value}" or "{Concept.TASK_MESSAGES.value} section"); however, don't use capitalization as emphasis for any other terms.
-        - {OrchestratorReasoningNotes.STEPS_RESTRICTIONS.value}
-        - {OrchestratorReasoningNotes.PROCEDURAL_SCRIPTING.value}
-
-        {{output_instructions}}
-        """
-        messages = [
-            SystemMessage(content=dedent_and_strip(context)),
-            SystemMessage(
-                content=dedent_and_strip(task).format(
-                    output_instructions=REASONING_OUTPUT_INSTRUCTIONS
-                )
-            ),
-        ]
-        return query_and_extract_reasoning(
-            messages,
-            preamble=f"Generating reasoning for updating the main task...\n{as_printable(messages)}",
-            printout=printout,
-        )
 
     @property
     def first_new_event(self) -> Event:
@@ -2695,7 +2734,7 @@ def test() -> None:
     # test_default_action_reasoning()
     # test_generate_extraction_reasoning()
     # test_human_cache_response()
-    # asyncio.run(test_orchestrator())
+    asyncio.run(test_orchestrator())
     # asyncio.run(test_base_capability())
 
 
