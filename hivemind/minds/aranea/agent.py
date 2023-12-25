@@ -124,11 +124,11 @@ class Blueprint:
     recent_events_size: int
     auto_wait: bool
     id_generator: IdGenerator
-    id: BlueprintId = field(init=False)
 
-    def __post_init__(self) -> None:
-        """Post init."""
-        self.id = generate_aranea_id(BlueprintId, self.id_generator)
+    @cached_property
+    def id(self) -> BlueprintId:
+        """Id of the blueprint."""
+        return generate_aranea_id(BlueprintId, self.id_generator)
 
 
 class TaskWorkStatus(Enum):
@@ -261,12 +261,12 @@ class Event:
     generating_task_id: TaskId
     """Id of the task that generated the event."""
     id_generator: IdGenerator
-    id: EventId = field(init=False)
     timestamp: str = field(default_factory=utc_timestamp)
 
-    def __post_init__(self) -> None:
-        """Post init."""
-        self.id = generate_aranea_id(EventId, self.id_generator)
+    @cached_property
+    def id(self) -> EventId:
+        """Id of the event."""
+        return generate_aranea_id(EventId, self.id_generator)
 
     def __str__(self) -> str:
         # return f"[{self.timestamp}] {self.data}"
@@ -505,16 +505,16 @@ class Task:
     rank_limit: int | None
     validator: WorkValidator
     id_generator: IdGenerator
-    id: TaskId = field(init=False)
     name: str | None = None
     executor: Executor | None = None
     notes: dict[str, str] = field(default_factory=dict)
     work_status: TaskWorkStatus = TaskWorkStatus.IDENTIFIED
     # event_status: TaskEventStatus = TaskEventStatus.NONE
 
-    def __post_init__(self) -> None:
-        """Post init."""
-        self.id = generate_aranea_id(TaskId, self.id_generator)
+    @cached_property
+    def id(self) -> TaskId:
+        """Id of the task."""
+        return generate_aranea_id(TaskId, self.id_generator)
 
     @property
     def definition_of_done(self) -> str | None:
@@ -1076,12 +1076,7 @@ class Orchestrator:
     @property
     def id(self) -> RuntimeId:
         """Runtime id of the orchestrator."""
-        return RuntimeId(f"{self.blueprint_id}_{self.task.id}")
-
-    @property
-    def blueprint_id(self) -> BlueprintId:
-        """Id of the orchestrator."""
-        return self.blueprint.id
+        return RuntimeId(f"{self.blueprint.id}_{self.task.id}")
 
     @property
     def executor_max_rank(self) -> int | None:
