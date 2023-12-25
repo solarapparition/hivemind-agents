@@ -853,27 +853,28 @@ class SubtaskIdentifcationResult:
 class ReasoningGenerator:
     """Generates reasoning for an orchestrator."""
 
-    orchestrator: "Orchestrator"
+    _orchestrator: "Orchestrator"
+    """Orchestrator for which to generate reasoning. Must not be modified."""
 
     @property
     def base_info(self) -> str:
         """Base information for the orchestrator."""
-        return self.orchestrator.base_info
+        return self._orchestrator.base_info
 
     @property
     def default_mode_actions(self) -> str:
         """Actions available to the orchestrator in the default state."""
-        return self.orchestrator.default_mode_actions
+        return self._orchestrator.default_mode_actions
 
     @property
     def role(self) -> Role:
         """Role of the orchestrator."""
-        return self.orchestrator.role
+        return self._orchestrator.role
 
     @property
     def subtask_mode_actions(self) -> str:
         """Actions available to the orchestrator in the subtask discussion state."""
-        return self.orchestrator.subtask_mode_actions
+        return self._orchestrator.subtask_mode_actions
 
     def generate_default_action_reasoning(self) -> str:
         """Generate reasoning for choosing an action in the default state."""
@@ -1405,7 +1406,7 @@ class Orchestrator:
     @property
     def reasoning_generator(self) -> ReasoningGenerator:
         """Reasoning generator for the orchestrator."""
-        return ReasoningGenerator(orchestrator=self)
+        return ReasoningGenerator(_orchestrator=self)
 
     def generate_default_action_reasoning(self) -> str:
         """Generate reasoning for choosing an action in the default state."""
@@ -2262,19 +2263,19 @@ class CapabilityMappingError(Exception):
     """Error raised when a task cannot be mapped to a capability."""
 
 
-@dataclass
-class BaseCapability:
-    """A base capability of an Aranea agent."""
+# @dataclass
+# class BaseCapability:
+#     """A base capability of an Aranea agent."""
 
 
-def automap_base_capability(
-    task: Task, base_capabilities: Sequence[BaseCapability]
-) -> BaseCapability | None:
-    """Automatically map a task to a base capability if possible."""
-    if not base_capabilities:
-        return None
-    raise NotImplementedError
-    return BaseCapability()
+# def automap_base_capability(
+#     task: Task, base_capabilities: Sequence[BaseCapability]
+# ) -> BaseCapability | None:
+#     """Automatically map a task to a base capability if possible."""
+#     if not base_capabilities:
+#         return None
+#     raise NotImplementedError
+#     return BaseCapability()
 
 
 def get_choice(prompt: str, allowed_choices: Set[Any], advisor: Advisor) -> Any:
@@ -2301,32 +2302,37 @@ class Delegator:
     """Delegates tasks to executors, creating new ones if needed."""
 
     executors_dir: Path
-    base_capabilities: Sequence[BaseCapability]
-    advisor: Advisor
-    id: DelegatorId = field(init=False)
+    # base_capabilities: Sequence[BaseCapability]
+    # advisor: Advisor
     id_generator: IdGenerator
 
-    def __post_init__(self) -> None:
-        """Post init."""
-        self.id = generate_aranea_id(DelegatorId, self.id_generator)
+    @cached_property
+    def id(self) -> DelegatorId:
+        """Id of the delegator."""
+        return generate_aranea_id(DelegatorId, self.id_generator)
 
     def search_blueprints(
         self,
         task: Task,
-        executor_files_dir: Path,
         rank_limit: int | None = None,
     ) -> list[BlueprintSearchResult]:
         """Search for blueprints of executors that can handle a task."""
-        if not os.listdir(executor_files_dir):
-            return []
 
+        # ....
+        # bot: human advisor > bot blueprint: points to BotExecutor() constructor that creates an executor
+        # search for agents related to task > hyde: hypothetical document embedding: use to generate hypothetical description for executor of a task; use to retrieve executors
+        # filter for agents with appropriate rank # only allow executors with rank <= task rank limit
+        # use reranker on agents if num agents remaining > k (~50)
+        # filter by minimum success rate, given large enough task history > task success is restricted to similar tasks that executor dealt with before
+        # reorder agents by rating # display top n > below certain task history, agent is considered "new", and unrated; displayed at top > rating = success_rate/(1 + completion_time) # completion time is squished down to 0-1 scale via x/(1+x)
+        # use executor selection reasoning to choose next agent to ask
+        # offer task to agent > refusal of agent counts as failure in task history
+        breakpoint()
         raise NotImplementedError
+        # > convert "justification" to "plan"
 
-        # > agent retrieval: success_rate/(1 + completion_time) # completion time is squished down to 0-1 scale via x/(1+x)
-        # > rank of none can access all agents
-        # > use strategy from self
-        # > remember to rerank
-        # > filter out executors that have more than 2 tasks and don't must have at least >50% success rate to be a candidate
+        # if not os.listdir(executor_files_dir):
+        #     return []
 
     def evaluate(
         self,
@@ -2341,11 +2347,13 @@ class Delegator:
     ) -> Executor:
         """Factory for creating a new executor for a task."""
         # if base_capability := self.map_base_capability(task):
-        if self.map_base_capability(task):
-            raise NotImplementedError
-            # return create_base_capability(base_capability)
+        # if self.map_base_capability(task):
+        #     raise NotImplementedError
+        # return create_base_capability(base_capability)
 
-        # now we know it's not a basic task that a simple bot can handle, so we must create an orchestrator
+        if task.rank_limit and task.rank_limit > 0:
+            raise NotImplementedError("Unable to automatically create 0-ranked executor.")
+
         blueprint = Blueprint(
             name=f"aranea_orchestrator_{task.id}",
             role=Role.ORCHESTRATOR,
@@ -2370,7 +2378,7 @@ class Delegator:
         max_candidates: int = 10,
     ) -> DelegationSuccessful:
         """Find an executor to delegate the task to."""
-        candidates = self.search_blueprints(task, self.executors_dir, task.rank_limit)
+        candidates = self.search_blueprints(task, task.rank_limit)
         if not candidates:
             return DelegationSuccessful(False)
         candidates = sorted(candidates, key=lambda result: result.score, reverse=True)[
@@ -2393,86 +2401,72 @@ class Delegator:
         if not delegation_successful:
             task.executor = self.make_executor(task, recent_events_size, auto_await)
 
-    def map_base_capability(self, task: Task) -> BaseCapability | None:
-        """Map a task to a base capability if possible."""
-        base_capability_question = dedent_and_strip(
-            """
-            Evaluate this task:
-            ```
-            {task}
-            ```
-            
-            Is this task a base capability, i.e. something that one of our bots can handle, OR a human can do in a few minutes? (y/n)
-            """
-        ).format(task=task.description)
-        is_base_capability = (
-            get_choice(
-                base_capability_question,
-                allowed_choices={"y", "n"},
-                advisor=self.advisor,
-            )
-            == "y"
-        )
+    # def map_base_capability(self, task: Task) -> BaseCapability | None:
+    #     """Map a task to a base capability if possible."""
+    #     base_capability_question = dedent_and_strip(
+    #         """
+    #         Evaluate this task:
+    #         ```
+    #         {task}
+    #         ```
 
-        if not is_base_capability:
-            return
+    #         Is this task a base capability, i.e. something that one of our bots can handle, OR a human can do in a few minutes? (y/n)
+    #         """
+    #     ).format(task=task.description)
+    #     is_base_capability = (
+    #         get_choice(
+    #             base_capability_question,
+    #             allowed_choices={"y", "n"},
+    #             advisor=self.advisor,
+    #         )
+    #         == "y"
+    #     )
 
-        # now we know it's a base capability
-        automapped_capability = automap_base_capability(task, self.base_capabilities)
-        capability_validation_question = dedent_and_strip(
-            """
-            I have identified the following base capability for this task:
-            "{automapped_capability}"
+    #     if not is_base_capability:
+    #         return
 
-            Please confirm whether this is correct (y/n):
-            """
-        ).format(automapped_capability=automapped_capability)
-        if not automapped_capability:
-            capability_validation_question = dedent_and_strip(
-                """
-                I have not identified any base capabilities for this task.
+    #     # now we know it's a base capability
+    #     automapped_capability = automap_base_capability(task, self.base_capabilities)
+    #     capability_validation_question = dedent_and_strip(
+    #         """
+    #         I have identified the following base capability for this task:
+    #         "{automapped_capability}"
 
-                Please confirm whether this is correct (y/n):
-                """
-            )
-        is_correct = (
-            get_choice(
-                capability_validation_question,
-                allowed_choices={"y", "n"},
-                advisor=self.advisor,
-            )
-            == "y"
-        )
-        if is_correct:
-            return automapped_capability
+    #         Please confirm whether this is correct (y/n):
+    #         """
+    #     ).format(automapped_capability=automapped_capability)
+    #     if not automapped_capability:
+    #         capability_validation_question = dedent_and_strip(
+    #             """
+    #             I have not identified any base capabilities for this task.
 
-        # now we know automapped capability didn't work
-        raise NotImplementedError
-        # manual_capability_prompt = "Automated capability mapping failed. Please choose a base capability for this task:"
-        # manual_capability_choice = get_choice(
-        #     manual_capability_prompt,
-        #     allowed_choices=set(range(len(self.all_base_capabilities))),
-        #     advisor=human,
-        # )
+    #             Please confirm whether this is correct (y/n):
+    #             """
+    #         )
+    #     is_correct = (
+    #         get_choice(
+    #             capability_validation_question,
+    #             allowed_choices={"y", "n"},
+    #             advisor=self.advisor,
+    #         )
+    #         == "y"
+    #     )
+    #     if is_correct:
+    #         return automapped_capability
 
-        # TODO: basic coding task case: 20 lines or less of base python > coding bot will be equipped with function it wrote
-        # TODO: basic search task case: search for basic info about a concept
-        # TODO: basic file reading/writing task case
-        # TODO: basic browser task case
+    #     # now we know automapped capability didn't work
+    #     raise NotImplementedError
+    #     # manual_capability_prompt = "Automated capability mapping failed. Please choose a base capability for this task:"
+    #     # manual_capability_choice = get_choice(
+    #     #     manual_capability_prompt,
+    #     #     allowed_choices=set(range(len(self.all_base_capabilities))),
+    #     #     advisor=human,
+    #     # )
 
-
-def default_base_capabilities() -> list[BaseCapability]:
-    """Default base capabilities."""
-
-
-
-    # > need to think through how conversion between base capability and bot works
-    # ....
-
-
-
-
-    breakpoint()
+    # TODO: basic coding task case: 20 lines or less of base python > coding bot will be equipped with function it wrote
+    # TODO: basic search task case: search for basic info about a concept
+    # TODO: basic file reading/writing task case
+    # TODO: basic browser task case
 
 
 @dataclass
@@ -2481,13 +2475,13 @@ class Swarm:
 
     files_dir: Path = Path(".data/aranea")
     """Directory for files related to the agent and any subagents."""
-    base_capabilities: Sequence[BaseCapability] = field(
-        default_factory=default_base_capabilities
-    )
-    """Base automated capabilities of the agent."""
-    base_capability_advisor: Advisor = field(
-        default_factory=lambda: Human(name="Human Advisor")
-    )
+    # base_capabilities: Sequence[BaseCapability] = field(
+    #     default_factory=default_base_capabilities
+    # )
+    # """Base automated capabilities of the agent."""
+    # base_capability_advisor: Advisor = field(
+    #     default_factory=lambda: Human(name="Human Advisor")
+    # )
     """Advisor for determining if some task is doable via a base capabilities."""
     work_validator: WorkValidator = field(
         default_factory=lambda: Human(name="Human Validator")
@@ -2519,8 +2513,8 @@ class Swarm:
         """Delegator for assigning tasks to executors."""
         return Delegator(
             self.executors_dir,
-            self.base_capabilities,
-            advisor=self.base_capability_advisor,
+            # self.base_capabilities,
+            # advisor=self.base_capability_advisor,
             id_generator=self.id_generator,
         )
 
@@ -2562,11 +2556,8 @@ class Swarm:
         )
 
 
-# create list of base capabilities
 # ....
-# base capability scaffolding development
 # > serialization > only populate knowledge on save if it’s empty
-# retrieval > novelty parameter > retrieval: add compute "cost" (actually total amount of time used) > when selecting executor, task success is based on similar tasks that executor dealt with before > maybe subagents should bid on task? # maybe offered task, then either accept or decline # check if there is theoretical framework for this
 # mutation > update: unify mutation with generation: mutation is same as re-generating each component of agent, including knowledge > blueprint: model parameter # explain that cheaper model costs less but may reduce accuracy > blueprint: novelty parameter: likelihood of choosing unproven subagent > blueprint: temperature parameter > when mutating agent, either update knowledge, or tweak a single parameter > when mutating agent, use component optimization of other best agents (that have actual trajectories) > new mutation has a provisional rating based on the rating of the agent it was mutated from; but doesn't appear in optimization list until it has a trajectory > only mutate when agent fails at some task > add success record to reasoning processes > retrieve previous reasoning for tasks similar to current task
 # MVP
 # turn printout into configurable parameter for aranea
@@ -2703,32 +2694,34 @@ def test_human_cache_response():
     cache_path.unlink(missing_ok=True)
 
 
-async def run_test_task(task: str, base_capabilities: Sequence[BaseCapability]) -> None:
+async def run_test_task(task: str) -> None:
     """Run a test task."""
     with shelve.open(".data/test/aranea_human_reply_cache", writeback=True) as cache:
         human_tester = Human(reply_cache=cache)
         aranea = Swarm(
             files_dir=Path(".data/test/aranea"),
-            base_capability_advisor=human_tester,
+            # base_capability_advisor=human_tester,
             work_validator=human_tester,
             id_generator=DefaultIdGenerator(
                 namespace=UUID("6bcf7dd4-8e29-58f6-bf5f-7566d4108df4"), seed="test"
             ),
-            base_capabilities=base_capabilities,
+            # base_capabilities=base_capabilities,
         )
         reply = (result := await aranea.run(task)).content
         while human_reply := human_tester.advise(reply):
             reply = await result.continue_conversation(human_reply)
 
+
 async def test_orchestrator() -> None:
     """Run an example task that's likely to make use of all orchestrator actions."""
     task = "Create an OpenAI assistant agent."
-    await run_test_task(task, base_capabilities=[])
+    await run_test_task(task)
+
 
 async def test_base_capability() -> None:
     """Run an example task that tests base capabilities."""
     task = "Create a mock timestamp generator that advances by 1 second each time it is called."
-    await run_test_task(task, base_capabilities=default_base_capabilities())
+    await run_test_task(task)
 
 
 def test() -> None:
