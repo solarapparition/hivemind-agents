@@ -24,7 +24,7 @@ def save_yaml(data: Mapping[str, Any], location: Path) -> None:
     default_yaml.dump(data, location)
 
 
-def dump_yaml_str(
+def as_yaml_str(
     data: Mapping[str, Any] | list[Any], yaml: YAML = default_yaml
 ) -> str:
     """Dump yaml as a string."""

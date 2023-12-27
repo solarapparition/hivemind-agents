@@ -13,7 +13,7 @@ from langchain.schema import SystemMessage, HumanMessage, BaseMessage
 from langchain.cache import SQLiteCache
 from hivemind.toolkit.text_extraction import extract_block, extract_blocks
 from hivemind.toolkit.text_formatting import dedent_and_strip
-from hivemind.toolkit.yaml_tools import default_yaml, dump_yaml_str
+from hivemind.toolkit.yaml_tools import default_yaml, as_yaml_str
 from hivemind.toolkit.models import (
     query_model,
     precise_model,
@@ -244,7 +244,7 @@ class FunctionAgent(AICodingAgent):
         updated_specs = self.specs
         if self.specs.get("background") is None:
             updated_specs = self.specs | {"background": NO_BACKGROUND_AVAILABLE}
-        specs_text = dump_yaml_str(updated_specs)
+        specs_text = as_yaml_str(updated_specs)
         return specs_text
 
     @property
@@ -354,7 +354,7 @@ class FunctionAgent(AICodingAgent):
         if not self.helpers:
             return NO_HELPERS_AVAILABLE
         helper_info = extract_function_core(self.helpers, self.helpers_dir)
-        helper_info = dump_yaml_str(helper_info)
+        helper_info = as_yaml_str(helper_info)
         # breakpoint()
         # helpers_text = dump_yaml_str(self.helper_function_names)
         return helper_info

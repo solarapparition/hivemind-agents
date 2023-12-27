@@ -5,7 +5,7 @@ import os
 import asyncio
 from itertools import chain
 from enum import Enum
-from dataclasses import dataclass, asdict, field
+from dataclasses import InitVar, dataclass, asdict, field
 from functools import cached_property
 from pathlib import Path
 from uuid import UUID
@@ -34,7 +34,7 @@ from hivemind.config import configure_langchain_cache
 from hivemind.toolkit.models import super_creative_model, precise_model, query_model
 from hivemind.toolkit.text_extraction import ExtractionError, extract_blocks
 from hivemind.toolkit.text_formatting import dedent_and_strip
-from hivemind.toolkit.yaml_tools import dump_yaml_str, default_yaml
+from hivemind.toolkit.yaml_tools import as_yaml_str, default_yaml
 from hivemind.toolkit.id_generation import (
     utc_timestamp,
     IdGenerator as DefaultIdGenerator,
@@ -112,11 +112,10 @@ class Reasoning:
 
 
 @dataclass
-class Blueprint:
-    """A blueprint for an Aranea agent."""
+class OrchestratorBlueprint:
+    """A blueprint for an orchestrator."""
 
     name: str
-    role: Role
     rank: int | None
     task_history: TaskHistory
     reasoning: Reasoning
@@ -129,6 +128,13 @@ class Blueprint:
     def id(self) -> BlueprintId:
         """Id of the blueprint."""
         return generate_aranea_id(BlueprintId, self.id_generator)
+
+    @property
+    def role(self) -> Role:
+        """Role of the agent."""
+        return Role.ORCHESTRATOR
+
+
 
 
 class TaskWorkStatus(Enum):
@@ -1062,11 +1068,13 @@ class ReasoningGenerator:
 class Orchestrator:
     """A recursively auto-specializing Aranea subagent."""
 
-    blueprint: Blueprint
+    blueprint: OrchestratorBlueprint
     task: Task
     files_parent_dir: Path
     delegator: "Delegator"
     focused_subtask: Task | None = None
+
+    _new_event_count: int = 0
 
     @classmethod
     @property
@@ -1241,6 +1249,7 @@ class Orchestrator:
 
     def serialize(self) -> dict[str, Any]:
         """Serialize the orchestrator to a dict."""
+        raise NotImplementedError("TODO: implement serialization of orchestrator itself")
         return asdict(self.blueprint)
 
     def save(self, update_blueprint: bool = True) -> None:
@@ -1954,8 +1963,6 @@ class Orchestrator:
             id_generator=self.id_generator,
         )
 
-    _new_event_count = 0
-
     @property
     def first_new_event(self) -> Event:
         """First new event since the last update of the main task."""
@@ -2075,7 +2082,7 @@ class Orchestrator:
         return (
             TaskDescription(
                 information=extracted_result["main_task_information"],
-                definition_of_done=dump_yaml_str(
+                definition_of_done=as_yaml_str(
                     extracted_result["main_task_definition_of_done"], YAML()
                 ),
             ),
@@ -2227,7 +2234,7 @@ class Orchestrator:
         blueprint_data = default_yaml.load(blueprint_location)
         blueprint_data["task_history"] = tuple(blueprint_data["task_history"])
         return cls(
-            blueprint=Blueprint(**blueprint_data),
+            blueprint=OrchestratorBlueprint(**blueprint_data),
             task=task,
             files_parent_dir=files_parent_dir,
             delegator=delegator,
@@ -2246,7 +2253,7 @@ class Reply:
         return await self.continue_func(message)
 
 
-def load_executor(blueprint: Blueprint) -> Executor:
+def load_executor(blueprint: OrchestratorBlueprint) -> Executor:
     """Factory function for loading an executor from a blueprint."""
     raise NotImplementedError
 
@@ -2290,11 +2297,39 @@ def get_choice(prompt: str, allowed_choices: Set[Any], advisor: Advisor) -> Any:
 class BlueprintSearchResult:
     """Result of a blueprint search."""
 
-    blueprint: Blueprint
+    blueprint: OrchestratorBlueprint
     score: float
 
 
 DelegationSuccessful = NewType("DelegationSuccessful", bool)
+
+
+@dataclass
+class BotBlueprint:
+    """A blueprint for a bot."""
+
+    name: str
+    task_history: TaskHistory
+    id: BlueprintId = field(init=False)
+
+    _id_generator: InitVar[IdGenerator]
+
+    def __post_init__(self, id_generator: IdGenerator) -> None:
+        self.id = generate_aranea_id(BlueprintId, id_generator)
+
+    @property
+    def role(self) -> Role:
+        """Role of the agent."""
+        return Role.BOT
+
+    @property
+    def rank(self) -> int:
+        """Rank of the bot, which is always 0."""
+        return 0
+
+    def serialize(self) -> dict[Any, Any]:
+        """Serialize the blueprint to a JSON-compatible dictionary."""
+        return asdict(self)
 
 
 @dataclass
@@ -2318,9 +2353,32 @@ class Delegator:
     ) -> list[BlueprintSearchResult]:
         """Search for blueprints of executors that can handle a task."""
 
+        # search for similar previous tasks that have been successfully done > may need to use reranker if there are lots of results
+        # populate candidate list with executors for those previous tasks
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         # ....
-        # bot: human advisor > bot blueprint: points to BotExecutor() constructor that creates an executor
-        # search for agents related to task > hyde: hypothetical document embedding: use to generate hypothetical description for executor of a task; use to retrieve executors
+        # add in all bots to agent candidate list
+        # ....
+        # > bot: amazon mturk
+        # > loading a bot requires a BotExecutor constructor in bot.py, that has a from_blueprint class method
+
+        breakpoint()
+
+        # ....
+        # search for agents related to task
         # filter for agents with appropriate rank # only allow executors with rank <= task rank limit
         # use reranker on agents if num agents remaining > k (~50)
         # filter by minimum success rate, given large enough task history > task success is restricted to similar tasks that executor dealt with before
@@ -2329,10 +2387,8 @@ class Delegator:
         # offer task to agent > refusal of agent counts as failure in task history
         breakpoint()
         raise NotImplementedError
+        # > estimate rank based on previous successful examples
         # > convert "justification" to "plan"
-
-        # if not os.listdir(executor_files_dir):
-        #     return []
 
     def evaluate(
         self,
@@ -2352,11 +2408,12 @@ class Delegator:
         # return create_base_capability(base_capability)
 
         if task.rank_limit and task.rank_limit > 0:
-            raise NotImplementedError("Unable to automatically create 0-ranked executor.")
+            raise NotImplementedError(
+                "Unable to automatically create 0-ranked executor."
+            )
 
-        blueprint = Blueprint(
+        blueprint = OrchestratorBlueprint(
             name=f"aranea_orchestrator_{task.id}",
-            role=Role.ORCHESTRATOR,
             rank=None,
             task_history=[task.id],
             reasoning=Reasoning(),
@@ -2654,7 +2711,7 @@ def test_generate_reasoning() -> None:
 def test_default_action_reasoning() -> None:
     """Test default_action_reasoning()."""
     orchestrator = Orchestrator(
-        blueprint=Blueprint(
+        blueprint=OrchestratorBlueprint(
             name="Test blueprint",
             role=Role.ORCHESTRATOR,
             rank=0,
@@ -2746,3 +2803,15 @@ if __name__ == "__main__":
 # - Contextual Independence: subtask description stands independently of the main task description. Should be understandable without main task details.
 # - Objective Clarity: Clearly state the subtask's objective. Objective should be specific, measurable, and achievable within the scope of the subtask.
 # """
+
+
+
+# Example of serialization
+# bot_blueprint = BotBlueprint(
+#     name="solarapparition",
+#     task_history=[],
+#     _id_generator=self.id_generator,
+# )
+# from os import makedirs
+# makedirs(self.executors_dir / bot_blueprint.id, exist_ok=True)
+# default_yaml.dump(bot_blueprint.serialize(), self.executors_dir / bot_blueprint.id / "blueprint.yaml")
