@@ -2315,8 +2315,9 @@ class Reply:
 
 def load_executor(blueprint: Blueprint) -> Executor:
     """Factory function for loading an executor from a blueprint."""
+
     # > loading a bot requires a BotExecutor constructor in bot.py, that has a from_blueprint class method
-    raise NotImplementedError
+    breakpoint()
 
 
 class Advisor(Protocol):
@@ -2529,8 +2530,7 @@ class Delegator:
         task: Task,
     ) -> BlueprintSearchResult:
         """Evaluate candidates for a task."""
-
-        breakpoint()
+        raise NotImplementedError
         # use executor selection reasoning to choose next agent to ask
 
     def make_executor(
@@ -2591,19 +2591,21 @@ class Delegator:
                     for candidate in candidates
                     if candidate.blueprint.id not in chosen
                 ]
+                if len(available_candidates) == 1:
+                    yield available_candidates[0]
                 next_candidate = self.choose_next_executor(available_candidates, task)
-                breakpoint()
                 chosen.add(next_candidate.blueprint.id)
                 yield next_candidate
 
         for candidate in generate_next_choice(candidates):
             candidate = load_executor(candidate.blueprint)
+            breakpoint()
             if candidate.accepts(task):
                 task.executor = candidate
                 task.rank_limit = candidate.rank
                 return DelegationSuccessful(True)
             # TODO: refusal of agent counts as failure in task history
-            raise NotImplementedError
+            breakpoint()
 
         breakpoint()
         return DelegationSuccessful(False)
