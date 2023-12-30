@@ -9,6 +9,7 @@ from functools import cached_property
 from pathlib import Path
 from uuid import UUID
 from typing import (
+    Generator,
     Iterable,
     Iterator,
     Literal,
@@ -2314,6 +2315,7 @@ class Reply:
 
 def load_executor(blueprint: Blueprint) -> Executor:
     """Factory function for loading an executor from a blueprint."""
+    # > loading a bot requires a BotExecutor constructor in bot.py, that has a from_blueprint class method
     raise NotImplementedError
 
 
@@ -2521,13 +2523,15 @@ class Delegator:
             )
         return search_results
 
-    def evaluate(
+    def choose_next_executor(
         self,
         candidates: list[BlueprintSearchResult],
         task: Task,
-    ) -> Iterable[BlueprintSearchResult]:
+    ) -> BlueprintSearchResult:
         """Evaluate candidates for a task."""
-        raise NotImplementedError
+
+        breakpoint()
+        # use executor selection reasoning to choose next agent to ask
 
     def make_executor(
         self, task: Task, recent_events_size: int, auto_await: bool
@@ -2576,23 +2580,36 @@ class Delegator:
             else rating,
             reverse=True,
         )[:max_candidates]
-        for candidate in self.evaluate(candidates, task):
+
+        def generate_next_choice(
+            candidates: list[BlueprintSearchResult],
+        ) -> Generator[BlueprintSearchResult, None, None]:
+            chosen: set[BlueprintId] = set()
+            while len(chosen) < len(candidates):
+                available_candidates = [
+                    candidate
+                    for candidate in candidates
+                    if candidate.blueprint.id not in chosen
+                ]
+                next_candidate = self.choose_next_executor(available_candidates, task)
+                breakpoint()
+                chosen.add(next_candidate.blueprint.id)
+                yield next_candidate
+
+        for candidate in generate_next_choice(candidates):
             candidate = load_executor(candidate.blueprint)
-            # > loading a bot requires a BotExecutor constructor in bot.py, that has a from_blueprint class method
-            breakpoint()
             if candidate.accepts(task):
                 task.executor = candidate
                 task.rank_limit = candidate.rank
                 return DelegationSuccessful(True)
+            # TODO: refusal of agent counts as failure in task history
+            raise NotImplementedError
 
-        # > when initally agent is saved, keep track of pass/fail details of subtasks
         breakpoint()
-        # > when regenerating agent components, include specific information from old agent
-        # use executor selection reasoning to choose next agent to ask
-        # offer task to agent > refusal of agent counts as failure in task history
         return DelegationSuccessful(False)
+        # > when initally agent is saved, keep track of pass/fail details of subtasks
         # > bot: amazon mturk
-        # > agent tweaking update: if agent fails task, first time is just a message; new version of agent probably should only have its knowledge updated on second fail; on third fail, whole agent is regenerated; on next fail, the next best agent is chosen, and the process repeats again; if the next best agent still can't solve the task, the task is auto-cancelled since it's likely too difficult (manual cancellation by orchestrator is still possible)
+        # > agent tweaking update: if agent fails task, first time is just a message; new version of agent probably should only have its knowledge updated on second fail; on third fail, whole agent is regenerated; on next fail, the next best agent is chosen, and the process repeats again; if the next best agent still can't solve the task, the task is auto-cancelled since it's likely too difficult (manual cancellation by orchestrator is still possible) > when regenerating agent components, include specific information from old agent
         # > estimate rank of task based on previous successful tasks
 
     def assign_executor(
