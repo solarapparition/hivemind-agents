@@ -1,11 +1,10 @@
 """Structure for Aranea agents."""
 
 import shelve
-import os
 import asyncio
 from itertools import chain
 from enum import Enum
-from dataclasses import InitVar, dataclass, asdict, field
+from dataclasses import dataclass, asdict, field
 from functools import cached_property
 from pathlib import Path
 from uuid import UUID
@@ -57,21 +56,23 @@ NONE = "None"
 class Concept(Enum):
     """Concepts for Aranea agents."""
 
-    MAIN_TASK_OWNER = "MAIN TASK OWNER"
     MAIN_TASK = "MAIN TASK"
+    MAIN_TASK_OWNER = f"{MAIN_TASK} OWNER"
     ORCHESTRATOR = "ORCHESTRATOR"
-    ORCHESTRATOR_ACTIONS = "ORCHESTRATOR ACTIONS"
+    ORCHESTRATOR_ACTIONS = f"{ORCHESTRATOR} ACTIONS"
     EXECUTOR = "EXECUTOR"
     RECENT_EVENTS_LOG = "RECENT EVENTS LOG"
     ORCHESTRATOR_INFORMATION_SECTIONS = "ORCHESTRATOR INFORMATION SECTIONS"
     SUBTASK = "SUBTASK"
-    FOCUSED_SUBTASK = "FOCUSED SUBTASK"
-    FOCUSED_SUBTASK_DISCUSSION_LOG = "FOCUSED SUBTASK DISCUSSION LOG"
-    MAIN_TASK_DESCRIPTION = "MAIN TASK DESCRIPTION"
-    MAIN_TASK_INFORMATION = "MAIN TASK INFORMATION"
-    MAIN_TASK_DEFINITION_OF_DONE = "MAIN TASK DEFINITION OF DONE"
+    SUBTASK_STATUS = f"{SUBTASK} STATUS"
+    SUBTASK_EXECUTOR = f"{SUBTASK} {EXECUTOR}"
+    FOCUSED_SUBTASK = f"FOCUSED {SUBTASK}"
+    FOCUSED_SUBTASK_DISCUSSION_LOG = f"{FOCUSED_SUBTASK} DISCUSSION LOG"
+    MAIN_TASK_DESCRIPTION = f"{MAIN_TASK} DESCRIPTION"
+    MAIN_TASK_INFORMATION = f"{MAIN_TASK} INFORMATION"
+    MAIN_TASK_DEFINITION_OF_DONE = f"{MAIN_TASK} DEFINITION OF DONE"
     TASK_MESSAGES = "TASK MESSAGES"
-    LAST_READ_MAIN_TASK_OWNER_MESSAGE = "LAST READ MAIN TASK OWNER MESSAGE"
+    LAST_READ_MAIN_TASK_OWNER_MESSAGE = f"LAST READ {MAIN_TASK_OWNER} MESSAGE"
 
 
 def as_printable(messages: Sequence[BaseMessage]) -> str:
@@ -122,19 +123,47 @@ class OrchestratorBlueprint:
     knowledge: str
     recent_events_size: int
     auto_wait: bool
-    id_generator: IdGenerator
+    id: BlueprintId
+    role: Role = field(init=False)
 
-    @cached_property
-    def id(self) -> BlueprintId:
-        """Id of the blueprint."""
-        return generate_aranea_id(BlueprintId, self.id_generator)
+    def __post_init__(self) -> None:
+        self.role = Role.ORCHESTRATOR
+
+
+@dataclass
+class BotBlueprint:
+    """A blueprint for a bot."""
+
+    name: str
+    task_history: TaskHistory
+    id: BlueprintId
 
     @property
     def role(self) -> Role:
         """Role of the agent."""
-        return Role.ORCHESTRATOR
+        return Role.BOT
+
+    @property
+    def rank(self) -> int:
+        """Rank of the bot, which is always 0."""
+        return 0
+
+    def serialize(self) -> dict[Any, Any]:
+        """Serialize the blueprint to a JSON-compatible dictionary."""
+        return asdict(self)
+
+    @classmethod
+    def deserialize(cls, data: dict[Any, Any]) -> Self:
+        """Deserialize the blueprint from a JSON-compatible dictionary."""
+        task_history = [TaskId(task_id) for task_id in data["task_history"]]
+        return cls(
+            name=data["name"],
+            task_history=task_history,
+            id=BlueprintId(data["id"]),
+        )
 
 
+Blueprint = BotBlueprint | OrchestratorBlueprint
 
 
 class TaskWorkStatus(Enum):
@@ -484,6 +513,13 @@ class Executor(Protocol):
     """An agent responsible for executing a task."""
 
     @property
+    def blueprint(self) -> Blueprint:
+        """Blueprint of the executor."""
+        raise NotImplementedError
+
+    # blueprint: Blueprint
+
+    @property
     def id(self) -> RuntimeId:
         """Runtime id of the executor."""
         raise NotImplementedError
@@ -560,6 +596,11 @@ class Task:
     def executor_id(self) -> RuntimeId | None:
         """Id of the task's executor."""
         return self.executor.id if self.executor else None
+
+    @property
+    def executor_blueprint_id(self) -> BlueprintId | None:
+        """Id of the task's executor."""
+        return self.executor.blueprint.id if self.executor else None
 
     @property
     def as_subtask_printout(self) -> str:
@@ -681,8 +722,8 @@ class ActionName(Enum):
 
 ORCHESTRATOR_CONCEPTS = f"""
 - {Concept.ORCHESTRATOR.value}: the agent that is responsible for managing the execution of a main task and managing the statuses of its subtasks, while communicating with the task's owner to gather required information for the task. The orchestrator must communicate with both the task owner and subtask executors to complete the main task as efficiently as possible.
-- MAIN TASK: the main task that the orchestrator is responsible for managing, which it does by identifying subtasks and providing support for specialized executor agents for the subtasks.
-- SUBTASK: a task that must be executed in order to complete the main task. The orchestrator does NOT execute subtasks itself; instead, it facilitates the resolution of subtasks by making high-level decisions regarding each subtask in the context of the overall task and providing support for the subtask executors.
+- {Concept.MAIN_TASK.value}: the main task that the orchestrator is responsible for managing, which it does by identifying subtasks and providing support for specialized executor agents for the subtasks.
+- {Concept.SUBTASK.value}: a task that must be executed in order to complete the main task. The orchestrator does NOT execute subtasks itself; instead, it facilitates the resolution of subtasks by making high-level decisions regarding each subtask in the context of the overall task and providing support for the subtask executors.
 - SUBTASK STATUS: the status of subtasks that have already been identified. The status of a subtask can be one of the following:
   - {TaskWorkStatus.BLOCKED.value}: the subtask is blocked by some issue, and execution cannot continue until the issue is resolved, typically by discussing the blocker and/or identifying a new subtask to resolve the blocker.
   - {TaskWorkStatus.IN_PROGRESS.value}: the subtask is currently being executed by a subtask executor.
@@ -1065,6 +1106,14 @@ class ReasoningGenerator:
 
 
 @dataclass
+class OrchestratorState:
+    """State of the orchestrator."""
+
+    focused_subtask: Task | None = None
+    new_event_count: int = 0
+
+
+@dataclass(frozen=True)
 class Orchestrator:
     """A recursively auto-specializing Aranea subagent."""
 
@@ -1072,15 +1121,23 @@ class Orchestrator:
     task: Task
     files_parent_dir: Path
     delegator: "Delegator"
-    focused_subtask: Task | None = None
-
-    _new_event_count: int = 0
+    state: OrchestratorState = field(default_factory=OrchestratorState)
 
     @classmethod
     @property
     def default_recent_events_size(cls) -> int:
         """Default size of recent events."""
         return 10
+
+    @property
+    def focused_subtask(self) -> Task | None:
+        """Focused subtask of the orchestrator."""
+        return self.state.focused_subtask
+
+    @property
+    def new_event_count(self) -> int:
+        """Number of new events."""
+        return self.state.new_event_count
 
     @property
     def id(self) -> RuntimeId:
@@ -1249,7 +1306,9 @@ class Orchestrator:
 
     def serialize(self) -> dict[str, Any]:
         """Serialize the orchestrator to a dict."""
-        raise NotImplementedError("TODO: implement serialization of orchestrator itself")
+        raise NotImplementedError(
+            "TODO: implement serialization of orchestrator itself"
+        )
         return asdict(self.blueprint)
 
     def save(self, update_blueprint: bool = True) -> None:
@@ -1786,7 +1845,7 @@ class Orchestrator:
 
     def focus_subtask(self, subtask: Task) -> Event:
         """Focus on a subtask."""
-        self.focused_subtask = subtask
+        self.state.focused_subtask = subtask
         return Event(
             data=SubtaskFocus(
                 owner_id=self.id,
@@ -1966,12 +2025,12 @@ class Orchestrator:
     @property
     def first_new_event(self) -> Event:
         """First new event since the last update of the main task."""
-        return self.event_log.events[-(self._new_event_count)]
+        return self.event_log.events[-(self.new_event_count)]
 
     @property
     def last_read_message(self) -> Event | None:
         """Last message read by the orchestrator."""
-        old_events = reversed(self.event_log.events[: -(self._new_event_count)])
+        old_events = reversed(self.event_log.events[: -(self.new_event_count)])
         old_messages = (
             event for event in old_events if isinstance(event.data, Message)
         )
@@ -2132,10 +2191,10 @@ class Orchestrator:
     def add_to_event_log(self, events: Sequence[Event]) -> None:
         """Add events to the event log."""
         self.task.event_log.add(*events)
-        self._new_event_count += len(events)
-        if self._new_event_count >= self.state_update_frequency:
+        self.state.new_event_count += len(events)
+        if self.new_event_count >= self.state_update_frequency:
             self.update_main_task_description()
-            self._new_event_count = 0
+            self.state.new_event_count = 0
 
     def add_thought(self, thought: str) -> None:
         """Add a thought to the event log."""
@@ -2253,7 +2312,7 @@ class Reply:
         return await self.continue_func(message)
 
 
-def load_executor(blueprint: OrchestratorBlueprint) -> Executor:
+def load_executor(blueprint: Blueprint) -> Executor:
     """Factory function for loading an executor from a blueprint."""
     raise NotImplementedError
 
@@ -2297,48 +2356,118 @@ def get_choice(prompt: str, allowed_choices: Set[Any], advisor: Advisor) -> Any:
 class BlueprintSearchResult:
     """Result of a blueprint search."""
 
-    blueprint: OrchestratorBlueprint
-    score: float
+    blueprint: Blueprint
+    task_subpool: list[Task] = field(default_factory=list)
+
+    @property
+    def success_rate(self) -> float | None:
+        """Success rate of the blueprint given the tasks."""
+        if not self.task_subpool:
+            return None
+        raise NotImplementedError
+        # success_rate = (
+        #     num_success := sum(task.success for task in self.task_pool)
+        # ) / (num_similar_tasks := len(self.task_pool))
+
+    @property
+    def task_subpool_size(self) -> int:
+        """Number of similar tasks."""
+        return len(self.task_subpool)
+
+    @property
+    def completion_time(self) -> float | None:
+        """Completion time of the blueprint given the tasks."""
+        if not self.task_subpool:
+            return None
+        raise NotImplementedError
+        # completion_time = (
+        #     sum(task.completion_time for task in self.task_pool)
+        #     / task_pool_size
+        # )
+
+    @property
+    def scaled_completion_time(self) -> float | None:
+        """Scaled completion time of the blueprint given the tasks."""
+        if not self.task_subpool:
+            return None
+        raise NotImplementedError
+        # scaled_completion_time = completion_time / (1 + completion_time)
+
+    @property
+    def rating(self) -> float | None:
+        """Rating of the blueprint given the tasks."""
+        if not self.task_subpool:
+            return None
+        raise NotImplementedError
+        # rating = success_rate / (1 + scaled_completion_time)
 
 
 DelegationSuccessful = NewType("DelegationSuccessful", bool)
 
 
-@dataclass
-class BotBlueprint:
-    """A blueprint for a bot."""
-
-    name: str
-    task_history: TaskHistory
-    id: BlueprintId = field(init=False)
-
-    _id_generator: InitVar[IdGenerator]
-
-    def __post_init__(self, id_generator: IdGenerator) -> None:
-        self.id = generate_aranea_id(BlueprintId, id_generator)
-
-    @property
-    def role(self) -> Role:
-        """Role of the agent."""
-        return Role.BOT
-
-    @property
-    def rank(self) -> int:
-        """Rank of the bot, which is always 0."""
-        return 0
-
-    def serialize(self) -> dict[Any, Any]:
-        """Serialize the blueprint to a JSON-compatible dictionary."""
-        return asdict(self)
+def find_similar_tasks(task: Task, task_pool: Iterable[Task]) -> list[Task]:
+    """Find similar tasks in a task pool."""
+    if not task_pool:
+        return []
+    raise NotImplementedError
 
 
-@dataclass
+def search_task_records(task: Task, task_records_dir: Path) -> list[Task]:
+    """Search for similar tasks in the task records."""
+    if not list(task_records_dir.iterdir()):
+        return []
+    raise NotImplementedError
+
+
+def rerank_tasks(task: Task, similar_tasks: list[Task]) -> list[Task]:
+    """Rerank similar tasks based on task similarity."""
+    raise NotImplementedError
+
+
+def is_bot(blueprint: Blueprint) -> bool:
+    """Check if a blueprint is a bot."""
+    return blueprint.rank == 0
+
+
+def load_blueprint(blueprint_path: Path) -> Blueprint:
+    """Load a blueprint from a file."""
+    blueprint_data = default_yaml.load(blueprint_path)
+    role = Role(blueprint_data["role"])
+    if role == Role.BOT:
+        return BotBlueprint.deserialize(blueprint_data)
+    raise NotImplementedError
+
+
+def load_blueprints(executors_dir: Path) -> Iterable[Blueprint]:
+    """Load blueprints from the executors directory."""
+    dirs = (
+        executor_dir
+        for executor_dir in executors_dir.iterdir()
+        if executor_dir.is_dir()
+    )
+
+    return (load_blueprint(executor_dir / "blueprint.yaml") for executor_dir in dirs)
+
+
+def is_new(blueprint: Blueprint, task_history_limit: int = 10) -> bool:
+    """Check if a blueprint is new."""
+    return len(blueprint.task_history) <= task_history_limit
+
+
+def load_tasks(task_ids: Iterable[TaskId], task_records_dir: Path) -> list[Task]:
+    """Load tasks from the task records."""
+    if not task_ids:
+        return []
+    raise NotImplementedError
+
+
+@dataclass(frozen=True)
 class Delegator:
     """Delegates tasks to executors, creating new ones if needed."""
 
     executors_dir: Path
-    # base_capabilities: Sequence[BaseCapability]
-    # advisor: Advisor
+    task_records_dir: Path
+    task_search_rerank_threshold: int
     id_generator: IdGenerator
 
     @cached_property
@@ -2352,43 +2481,45 @@ class Delegator:
         rank_limit: int | None = None,
     ) -> list[BlueprintSearchResult]:
         """Search for blueprints of executors that can handle a task."""
+        similar_tasks = search_task_records(task, self.task_records_dir)
+        if len(similar_tasks) > self.task_search_rerank_threshold:
+            similar_tasks = rerank_tasks(task, similar_tasks)
+        past_blueprint_ids = [task.executor_blueprint_id for task in similar_tasks]
 
-        # search for similar previous tasks that have been successfully done > may need to use reranker if there are lots of results
-        # populate candidate list with executors for those previous tasks
+        def is_candidate(blueprint: Blueprint) -> bool:
+            """Check if a blueprint is a candidate for the task."""
+            assert blueprint.rank is not None
+            if (
+                blueprint.id not in past_blueprint_ids
+                and not is_bot(blueprint)
+                or (rank_limit is not None and blueprint.rank > rank_limit)
+            ):
+                return False
+            if is_new(blueprint):
+                return True
 
+            # > TODO: filter by minimum success rate, given large enough task history > task success is restricted to similar tasks that executor dealt with before
+            raise NotImplementedError
 
-
-
-
-
-
-
-
-
-
-
-
-
-        # ....
-        # add in all bots to agent candidate list
-        # ....
-        # > bot: amazon mturk
-        # > loading a bot requires a BotExecutor constructor in bot.py, that has a from_blueprint class method
-
-        breakpoint()
-
-        # ....
-        # search for agents related to task
-        # filter for agents with appropriate rank # only allow executors with rank <= task rank limit
-        # use reranker on agents if num agents remaining > k (~50)
-        # filter by minimum success rate, given large enough task history > task success is restricted to similar tasks that executor dealt with before
-        # reorder agents by rating # display top n > below certain task history, agent is considered "new", and unrated; displayed at top > rating = success_rate/(1 + completion_time) # completion time is squished down to 0-1 scale via x/(1+x)
-        # use executor selection reasoning to choose next agent to ask
-        # offer task to agent > refusal of agent counts as failure in task history
-        breakpoint()
-        raise NotImplementedError
-        # > estimate rank based on previous successful examples
-        # > convert "justification" to "plan"
+        candidate_blueprints = [
+            blueprint
+            for blueprint in load_blueprints(self.executors_dir)
+            if is_candidate(blueprint)
+        ]
+        if not candidate_blueprints:
+            return []
+        search_results: list[BlueprintSearchResult] = []
+        for blueprint in candidate_blueprints:
+            blueprint_tasks = load_tasks(blueprint.task_history, self.task_records_dir)
+            candidate_similar_tasks = find_similar_tasks(task, blueprint_tasks)
+            if not candidate_similar_tasks:
+                assert is_bot(
+                    blueprint
+                ), f"Blueprint search: no similar tasks found for non-bot blueprint:\n\nBlueprint:\n{blueprint}\n\nTask:\n{task}"
+            search_results.append(
+                BlueprintSearchResult(blueprint, candidate_similar_tasks)
+            )
+        return search_results
 
     def evaluate(
         self,
@@ -2420,7 +2551,7 @@ class Delegator:
             knowledge="",
             recent_events_size=recent_events_size,
             auto_wait=auto_await,
-            id_generator=self.id_generator,
+            id=generate_aranea_id(BlueprintId, self.id_generator),
         )
         return Orchestrator(
             blueprint=blueprint,
@@ -2438,16 +2569,31 @@ class Delegator:
         candidates = self.search_blueprints(task, task.rank_limit)
         if not candidates:
             return DelegationSuccessful(False)
-        candidates = sorted(candidates, key=lambda result: result.score, reverse=True)[
-            :max_candidates
-        ]
+        candidates = sorted(
+            candidates,
+            key=lambda result: float("inf")
+            if (rating := result.rating is None)
+            else rating,
+            reverse=True,
+        )[:max_candidates]
         for candidate in self.evaluate(candidates, task):
             candidate = load_executor(candidate.blueprint)
+            # > loading a bot requires a BotExecutor constructor in bot.py, that has a from_blueprint class method
+            breakpoint()
             if candidate.accepts(task):
                 task.executor = candidate
                 task.rank_limit = candidate.rank
                 return DelegationSuccessful(True)
+
+        # > when initally agent is saved, keep track of pass/fail details of subtasks
+        breakpoint()
+        # > when regenerating agent components, include specific information from old agent
+        # use executor selection reasoning to choose next agent to ask
+        # offer task to agent > refusal of agent counts as failure in task history
         return DelegationSuccessful(False)
+        # > bot: amazon mturk
+        # > agent tweaking update: if agent fails task, first time is just a message; new version of agent probably should only have its knowledge updated on second fail; on third fail, whole agent is regenerated; on next fail, the next best agent is chosen, and the process repeats again; if the next best agent still can't solve the task, the task is auto-cancelled since it's likely too difficult (manual cancellation by orchestrator is still possible)
+        # > estimate rank of task based on previous successful tasks
 
     def assign_executor(
         self, task: Task, recent_events_size: int, auto_await: bool
@@ -2548,6 +2694,8 @@ class Swarm:
     """Number of recent events to display in orchestrators' event logs."""
     auto_wait: bool = True
     """Whether orchestrators will automatically wait for their executors. If disabled, orchestrators may perform other actions while an executor works on a task."""
+    task_search_rerank_threshold: int = 100
+    """When searching for similar past tasks, run a reranker if there are more than this many tasks."""
     id_generator: IdGenerator = field(default_factory=DefaultIdGenerator)
     """Generator for ids of entities in the system."""
 
@@ -2558,18 +2706,31 @@ class Swarm:
     @property
     def cache_dir(self) -> Path:
         """Directory for the LLM cache."""
-        return self.files_dir / ".cache"
+        if not (cache_dir := self.files_dir / ".cache").exists():
+            cache_dir.mkdir(parents=True, exist_ok=True)
+        return cache_dir
 
     @property
     def executors_dir(self):
         """Directory for executors."""
-        return self.files_dir / "executors"
+        if not (executors_dir := self.files_dir / "executors").exists():
+            executors_dir.mkdir(parents=True, exist_ok=True)
+        return executors_dir
+
+    @property
+    def task_records_dir(self):
+        """Directory for task records."""
+        if not (task_records_dir := self.files_dir / "task_records").exists():
+            task_records_dir.mkdir(parents=True, exist_ok=True)
+        return task_records_dir
 
     @cached_property
     def delegator(self) -> Delegator:
         """Delegator for assigning tasks to executors."""
         return Delegator(
-            self.executors_dir,
+            executors_dir=self.executors_dir,
+            task_records_dir=self.task_records_dir,
+            task_search_rerank_threshold=self.task_search_rerank_threshold,
             # self.base_capabilities,
             # advisor=self.base_capability_advisor,
             id_generator=self.id_generator,
@@ -2587,8 +2748,6 @@ class Swarm:
 
     async def run(self, message: str) -> Reply:
         """Run the agent with a message, and a way to continue the conversation. Rerunning this method starts a new conversation."""
-        if not self.executors_dir.exists():
-            self.executors_dir.mkdir(parents=True, exist_ok=True)
         task = Task(
             description=TaskDescription(information=message),
             owner_id=self.id,
@@ -2803,7 +2962,6 @@ if __name__ == "__main__":
 # - Contextual Independence: subtask description stands independently of the main task description. Should be understandable without main task details.
 # - Objective Clarity: Clearly state the subtask's objective. Objective should be specific, measurable, and achievable within the scope of the subtask.
 # """
-
 
 
 # Example of serialization
